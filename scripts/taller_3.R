@@ -15,8 +15,8 @@ wd_code <- "/scripts"
 wd_output <- "/views"
 
 # Importing data ----------------------------------------------------------
-
-df <- read.csv(paste0(wd_main, wd_data, "/submission_template.csv"))
+train <- read.csv(paste0(wd_main, wd_data, "/train.csv"))
+test <- read.csv(paste0(wd_main, wd_data, "/test.csv"))
 
 # Data --------------------------------------------------------------------
 
