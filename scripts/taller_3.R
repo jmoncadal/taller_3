@@ -12,7 +12,7 @@ p_load(rio, writexl, readxl, tidyverse, caret, keras,
 
 # Establishing paths ------------------------------------------------------
 
-wd_main <- "C:/Users/Juan/OneDrive - Universidad de los andes/Escritorio/Universidad/Posgrado/1. Primer Semestre/Big Data y Machine Learning/Trabajos/taller_3"
+wd_main <- "taller_3"
 wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
@@ -168,7 +168,74 @@ amenities <- osmdata::available_tags("amenity")
 leisure <- osmdata::available_tags("leisure")
 public_transport <- osmdata::available_tags("public_transport")
 wholesale <- osmdata::available_tags("wholesale")
-  
+
+  # Distancia al cafe más cercano
+# Extraemos la info de todos los cafés de Bogotá
+cafes <- opq(bbox = getbb("Bogota Colombia")) |>
+  add_osm_feature(key = "amenity", value = "cafe")
+
+# Cambiamos el formato para que sea un objeto sf (simple features)
+cafes_sf <- osmdata_sf(cafes)
+
+# De las features del café nos interesa su geometría y el nombre
+cafes_geometria <- cafes_sf$osm_points |>
+  dplyr::select(osm_id, name)
+
+# Guardamos los puntos de los cafés como sf
+cafes_geometria <- st_as_sf(cafes_geometria)
+
+# Calculamos las coordenadas x,y de cada café
+cafes_geometria <- cafes_geometria |>
+  mutate(x = st_coordinates(cafes_geometria)[, "X"]) |>
+  mutate(y = st_coordinates(cafes_geometria)[, "Y"])
+
+# Pasamos cafés y train a objetos sf en 4326
+cafes_sf <- st_as_sf(cafes_geometria, coords = c("x", "y"), crs = 4326)
+train_sf <- st_as_sf(train, coords = c("lon", "lat"), crs = 4326)
+
+# Calculamos la matriz de distancias (propiedades x cafés)
+dist_matrix_cafe <- st_distance(x = train_sf, y = cafes_sf)
+dim(dist_matrix_cafe)   # filas = n de train, columnas = n de cafés
+
+# Distancia mínima al café más cercano para cada observación
+dist_min_cafe <- apply(dist_matrix_cafe, 1, min)
+
+# Agregamos la variable directamente a train 
+train$distancia_cafe <- as.numeric(dist_min_cafe)   # en metros
+
+# Scatter con la relación entre el precio del inmueble y distancia a cafes
+ggplot(train, aes(x = distancia_cafe, y = price)) +
+  geom_point(color = "darkblue", alpha = 0.4) +
+  theme_classic()
+
+
+
+  # Cantidad de cafes en 500 metros
+# Convertimos train y cafés al CRS de metros
+train_sf_m <- st_transform(train_sf, 3116)
+cafes_sf_m <- st_transform(cafes_sf, 3116)
+
+# Definimos el radio del buffer en metros
+radio_buffer <- 500  # puedes cambiarlo a 300, 1000, etc.
+
+# Creamos un buffer de 500m alrededor de cada inmueble
+train_buffer <- st_buffer(train_sf_m, dist = radio_buffer)
+
+# Para cada inmueble, lista de cafés que caen dentro del buffer
+intersections <- st_intersects(train_buffer, cafes_sf_m)
+
+# Número de cafés en 500m alrededor de cada inmueble
+n_cafes_500m <- lengths(intersections)
+
+# Pasamos de nuevo a data.frame normal y pegamos la nueva variable
+train$n_cafes_500m <- n_cafes_500m
+
+#Scatter
+ggplot(train, aes(x = n_cafes_500m, y = price)) +
+  geom_point(color = "darkblue", alpha = 0.4) +
+  theme_classic()
+
+
 # Models ------------------------------------------------------------------
 
 
