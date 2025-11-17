@@ -12,7 +12,7 @@ p_load(rio, writexl, readxl, tidyverse, caret, keras,
 
 # Establishing paths ------------------------------------------------------
 
-wd_main <- "taller_3"
+wd_main <- "C:/Users/Juan/OneDrive - Universidad de los andes/Escritorio/Universidad/Posgrado/1. Primer Semestre/Big Data y Machine Learning/Trabajos/taller_3"
 wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
@@ -22,6 +22,7 @@ wd_output <- "/views"
 test <- read.csv(paste0(wd_main, wd_data, "/test.csv"))
 train <- read.csv(paste0(wd_main, wd_data, "/train.csv"))
 localidades <- st_read(paste0(wd_main, wd_data, "/localidades.geojson"))
+upz <- st_read(paste0(wd_main, wd_data, "/IndUPZ.json"))
 
 # Data --------------------------------------------------------------------
 
@@ -58,39 +59,19 @@ localidades <- st_read(paste0(wd_main, wd_data, "/localidades.geojson"))
     theme_minimal() +
     theme(legend.position = "none")
 
-  # Filtering
-
-  ggplot(train %>%  filter(property_type == "Apartamento")) +
-    geom_point(aes(x = surface_total, y = price )) + 
-    theme_minimal()
-  
-  mean_price <- train %>% 
-    filter(property_type == "Apartamento") %>% 
-    mutate(surface_rounded = round(price/ 10) * 10) %>% 
-    group_by(surface_rounded) %>% 
-    mutate(mean_price = mean(price, na.rm = TRUE))
-  
-  ggplot(mean_price) +
-    geom_point(aes(x = surface_rounded, y = mean_price )) + 
-    theme_minimal()
-
-
 # Spatial modeling --------------------------------------------------------
-
-  limites <- getbb("Bogota Colombia")
-
-  train <- train %>% 
-    filter(between(lon, limites[1, "min"], limites[1, "max"]) & 
-           between(lat, limites[2, "min"], limites[2, "max"]))
   
-  leaflet() %>%
-      addTiles() %>% 
-      addCircles(lng = train$lon,
-                 lat = train$lat)
+  train_sf <- train_nm %>% 
+    st_as_sf(coords = c("lon", "lat"), crs = 4626)
+  upz <- st_transform(upz, 4626)
+  localidades <- st_transform(localidades, 4626)
   
+  train_upz <- st_join(train_sf, upz, join = st_intersects)
+  train_full <- st_join(localidades, train_upz, join = st_intersects)
+
   # Variable creation
   
-  train <- train %>% 
+  train_sf <- train_sf %>% 
     mutate(p_msq = price/surface_total) %>% 
     drop_na(p_msq)
 
@@ -103,64 +84,62 @@ localidades <- st_read(paste0(wd_main, wd_data, "/localidades.geojson"))
   latitud_central <- mean(train$lat)
   longitud_central <- mean(train$lon)
   
-  leaflet() %>% 
-    addTiles() %>% 
-    setView(lng = longitud_central, lat = latitud_central, zoom = 12) %>% 
-    addCircles(lng = train$lon,
-               lat = train$lat,
-               col = train$color,
-               fillOpacity = 1,
-               opacity = 1,
-               radius = 1)
-  
-  # Mapa con localidades
-  
-  localidades_eliminar <- c(89, 94, 95)
-  localidades <- st_transform(localidades, 4626) %>% 
-    filter(!OBJECTID %in% localidades_eliminar)
+  # leaflet() %>% 
+  #   addTiles() %>% 
+  #   setView(lng = longitud_central, lat = latitud_central, zoom = 12) %>% 
+  #   addCircles(lng = train$lon,
+  #              lat = train$lat,
+  #              col = train$color,
+  #              fillOpacity = 1,
+  #              opacity = 1,
+  #              radius = 1)
 
-  train_sf <- st_as_sf(train, coords = c("lon", "lat"), crs = 4626)
   
-  # Distribución precio apartamentos
+  # Mapa con UPZ 
 
-  ggplot() +
-    geom_sf(data = localidades, fill = "gray95", color = "black") +
-    geom_sf(
-      data = train_sf %>% filter(property_type == "Apartamento"),
-      aes(color = p_msq),
-      shape = 16, size = 0.8, alpha = 0.7
-    ) +
-    scale_color_gradient(
-      low = "#ffdf00", high = "#0a5c0a",
-      name = "Precio m²"
-    ) +
-    theme_minimal() +
-    theme(
-      axis.text = element_blank(),
-      axis.title = element_blank(),
-      legend.position = "right") +
-    labs(title = "Precio por metro cuadrado — Apartamentos")
-  
-  # Distribución precio casas
+  # Precio metro cuadrado apartamentos
   
   ggplot() +
-    geom_sf(data = localidades, fill = "gray95", color = "black") +
-    geom_sf(
-      data = train_sf %>% filter(property_type == "Casa"),
-      aes(color = p_msq),
-      shape = 16, size = 0.8, alpha = 0.7
-    ) +
-    scale_color_gradient(
-      low = "#ffdf00", high = "#0a5c0a",
-      name = "Precio m²"
-    ) +
+    geom_sf(data = upz, fill = "gray95", color = "black") +
+    geom_sf(data = train_sf %>% 
+              filter(property_type == "Apartamento"),
+            aes(color = p_msq),
+            shape = 16, size = 0.8, alpha = 0.7) +
+    scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
     theme_minimal() +
-    theme(
-      axis.text = element_blank(),
-      axis.title = element_blank(),
-      legend.position = "right") +
+    theme(axis.text = element_blank(),
+          axis.title = element_blank(),
+          legend.position = "right") +
+  labs(title = "Precio por metro cuadrado — Apartamento")
+  
+  # Precio metro cuadrado casas
+  
+  ggplot() +
+    geom_sf(data = upz, fill = "gray95", color = "black") +
+    geom_sf(data = train_sf %>% 
+              filter(property_type == "Casa"),
+            aes(color = p_msq),
+            shape = 16, size = 0.8, alpha = 0.7) +
+    scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
+    theme_minimal() +
+    theme(axis.text = element_blank(),
+          axis.title = element_blank(),
+          legend.position = "right") +
     labs(title = "Precio por metro cuadrado — Casas")
-
+ 
+  # Distribución viviendas por UPZ
+ 
+  ggplot() +
+    geom_sf(data = upz, fill = "gray95", color = "black") +
+    geom_sf(data = train_upz, aes(color = as.factor(CODIGO_UPZ)))
+  
+  # Distribución viviendas por localidad
+  
+  ggplot() +
+    geom_sf(data = localidades, fill = "gray95", color = "black") +
+    geom_sf(data = train_full, aes(color = as.factor(LocNombre)))
+  
+    
 # Spatial data ------------------------------------------------------------
 
 osmdata::available_features()
@@ -169,10 +148,9 @@ leisure <- osmdata::available_tags("leisure")
 public_transport <- osmdata::available_tags("public_transport")
 highway <- osmdata::available_tags("highway")
 landuse <- osmdata::available_tags("landuse")
-wholesale <- osmdata::available_tags("wholesale")
 
+# Distancia al café más cercano -------------------------------------------
 
-# --------- Distancia al cafe más cercano
 cafes <- opq(bbox = getbb("Bogota Colombia")) |>
   add_osm_feature(key = "amenity", value = "cafe")
 
@@ -227,8 +205,8 @@ cafes <- opq(bbox = getbb("Bogota Colombia")) |>
     geom_point(color = "darkblue", alpha = 0.4) +
     theme_classic()
 
+# Distancia a estación de transporte --------------------------------------
 
-# -------- Distancia a bus station
 bus <- opq(bbox = getbb("Bogota Colombia")) |>
   add_osm_feature(key = "amenity", value = "bus_station")
 
@@ -254,8 +232,8 @@ bus <- opq(bbox = getbb("Bogota Colombia")) |>
   
   train$distancia_bus <- as.numeric(dist_min_bus)
 
+# Distancia a parque más cercano ------------------------------------------
 
-# ---------- Distancia a un parque
 parques <- opq(bbox = getbb("Bogota Colombia")) |>
   add_osm_feature(key = "leisure", value = "park")
 
@@ -280,7 +258,8 @@ parques <- opq(bbox = getbb("Bogota Colombia")) |>
 
   train$distancia_parque <- as.numeric(dist_min_parque)
 
-# ---------  Iluminación en un buffer
+# Iluminación con buffer --------------------------------------------------
+  
 lamparas <- opq(bbox = getbb("Bogota Colombia")) |>
   add_osm_feature(key = "highway", value = "street_lamp")
 
@@ -312,8 +291,8 @@ lamparas <- opq(bbox = getbb("Bogota Colombia")) |>
 
   train$n_lamparas_200m <- n_lamparas_200m
 
+# Zona residencial --------------------------------------------------------
 
-# -------- Zona residencial
 residential <- opq(bbox = getbb("Bogota Colombia")) |>
   add_osm_feature(key = "landuse", value = "residential")
 
@@ -326,7 +305,6 @@ residential <- opq(bbox = getbb("Bogota Colombia")) |>
 
   # 1 si el inumeble está en zona residencial, 0 si no
   train$is_residential <- as.integer(lengths(residential_relation) > 0)
-
 
 # Models ------------------------------------------------------------------
 
