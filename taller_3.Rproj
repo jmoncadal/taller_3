@@ -11,3 +11,7 @@ Encoding: UTF-8
 
 RnwWeave: Sweave
 LaTeX: pdfLaTeX
+
+PythonType: virtualenv
+PythonVersion: 3.11.9
+PythonPath: ~/.virtualenvs/spacy_bogota/Scripts/python.exe
