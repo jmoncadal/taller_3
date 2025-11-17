@@ -305,7 +305,110 @@ residential <- opq(bbox = getbb("Bogota Colombia")) |>
 
   # 1 si el inumeble está en zona residencial, 0 si no
   train$is_residential <- as.integer(lengths(residential_relation) > 0)
+  
+# Cantidad de restaurantes --------------------------------------------------------
+  rest <- opq(bbox = getbb("Bogota Colombia")) |>
+    add_osm_feature(key = "amenity", value = "restaurant")
+  
+  # sf
+  rest_sf_raw <- osmdata_sf(rest)
+  rest_geometria <- rest_sf_raw$osm_points |>
+    dplyr::select(osm_id, name)
+  rest_geometria <- st_as_sf(rest_geometria)
+  
+  # Coordenadas
+  rest_geometria <- rest_geometria |>
+    mutate(
+      x = st_coordinates(rest_geometria)[, "X"],
+      y = st_coordinates(rest_geometria)[, "Y"]
+    )
+  
+  # Restaurantes en metros
+  rest_sf_m  <- st_as_sf(rest_geometria, coords = c("x", "y"), crs = 4326) |>
+    st_transform(3116)
+  
+  # Buffer
+  radio_buffer <- 500
+  train_buffer_rest <- st_buffer(train_sf_m, dist = radio_buffer)
+  intersections_rest <- st_intersects(train_buffer_rest, rest_sf_m)
+  n_restaurants_500m <- lengths(intersections_rest)
+  
+  train$n_restaurants_500m <- n_restaurants_500m
+  
+# Distancia a club --------------------------------------------------------
+  club_social <- opq(bbox = getbb("Bogota Colombia")) |>
+    add_osm_feature(key = "club", value = "social")
 
+  club_social_sf_raw <- osmdata_sf(club_social)
+  club_social_geometria <- club_social_sf_raw$osm_points |>
+    dplyr::select(osm_id, name)
+  
+  club_social_geometria <- st_as_sf(club_social_geometria) |>
+    mutate(
+      x = st_coordinates(geometry)[, "X"],
+      y = st_coordinates(geometry)[, "Y"]
+    )
+  
+  club_social_sf <- st_as_sf(club_social_geometria, coords = c("x", "y"), crs = 4326)
+
+  dist_matrix_club <- st_distance(x = train_sf, y = club_social_sf)
+  dist_min_club <- apply(dist_matrix_club, 1, min)
+  
+  train$distancia_club_social <- as.numeric(dist_min_club)
+  
+# Supermercado más cercano --------------------------------------------------------
+
+  super_query <- opq(bbox = getbb("Bogota Colombia")) |>
+    add_osm_feature(key = "shop", value = "supermarket")
+  
+  super_sf_raw <- osmdata_sf(super_query)
+  super_geometria <- super_sf_raw$osm_points |>
+    dplyr::select(osm_id, name)
+
+  super_geometria <- st_as_sf(super_geometria) |>
+    mutate(
+      x = st_coordinates(geometry)[, "X"],
+      y = st_coordinates(geometry)[, "Y"]
+    )
+
+  super_sf <- st_as_sf(super_geometria, coords = c("x", "y"), crs = 4326)
+  
+  dist_matrix_super <- st_distance(x = train_sf, y = super_sf)
+  dist_min_super <- apply(dist_matrix_super, 1, min)
+
+  train$distancia_supermercado <- as.numeric(dist_min_super)
+  
+# Centro comercial más cercano --------------------------------------------------------
+  mall_query <- opq(bbox = getbb("Bogota Colombia")) |>
+    add_osm_feature(key = "shop", value = "mall")
+  
+  mall_sf_raw <- osmdata_sf(mall_query)
+  
+  if (!is.null(mall_sf_raw$osm_points) && nrow(mall_sf_raw$osm_points) > 0) {
+    
+    mall_geometria <- mall_sf_raw$osm_points |>
+      dplyr::select(osm_id, name, geometry)
+    
+  } else {
+    
+    mall_geometria <- mall_sf_raw$osm_polygons |>
+      dplyr::select(osm_id, name, geometry) |>
+      st_centroid()
+  }
+  
+  mall_geometria <- st_as_sf(mall_geometria) |>
+    mutate(
+      x = st_coordinates(geometry)[, "X"],
+      y = st_coordinates(geometry)[, "Y"]
+    )
+  
+  mall_sf  <- st_as_sf(mall_geometria, coords = c("x", "y"), crs = 4326)
+
+  dist_matrix_mall <- st_distance(x = train_sf, y = mall_sf)
+  dist_min_mall <- apply(dist_matrix_mall, 1, min)
+  
+  train$distancia_mall <- as.numeric(dist_min_mall)
+  
 # Models ------------------------------------------------------------------
 
 
