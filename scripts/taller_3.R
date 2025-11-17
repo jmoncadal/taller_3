@@ -167,73 +167,165 @@ osmdata::available_features()
 amenities <- osmdata::available_tags("amenity")
 leisure <- osmdata::available_tags("leisure")
 public_transport <- osmdata::available_tags("public_transport")
+highway <- osmdata::available_tags("highway")
+landuse <- osmdata::available_tags("landuse")
 wholesale <- osmdata::available_tags("wholesale")
 
-  # Distancia al cafe más cercano
-# Extraemos la info de todos los cafés de Bogotá
+
+# --------- Distancia al cafe más cercano
 cafes <- opq(bbox = getbb("Bogota Colombia")) |>
   add_osm_feature(key = "amenity", value = "cafe")
 
-# Cambiamos el formato para que sea un objeto sf (simple features)
-cafes_sf <- osmdata_sf(cafes)
+  # Simple features
+  cafes_sf <- osmdata_sf(cafes)
+  cafes_geometria <- cafes_sf$osm_points |>
+    dplyr::select(osm_id, name)
+  cafes_geometria <- st_as_sf(cafes_geometria)
 
-# De las features del café nos interesa su geometría y el nombre
-cafes_geometria <- cafes_sf$osm_points |>
-  dplyr::select(osm_id, name)
+  # Coordenadas x,y de cada café
+  cafes_geometria <- cafes_geometria |>
+    mutate(x = st_coordinates(cafes_geometria)[, "X"]) |>
+    mutate(y = st_coordinates(cafes_geometria)[, "Y"])
 
-# Guardamos los puntos de los cafés como sf
-cafes_geometria <- st_as_sf(cafes_geometria)
+  # Objetos sf en 4326
+  cafes_sf <- st_as_sf(cafes_geometria, coords = c("x", "y"), crs = 4326)
+  train_sf <- st_as_sf(train, coords = c("lon", "lat"), crs = 4326)
 
-# Calculamos las coordenadas x,y de cada café
-cafes_geometria <- cafes_geometria |>
-  mutate(x = st_coordinates(cafes_geometria)[, "X"]) |>
-  mutate(y = st_coordinates(cafes_geometria)[, "Y"])
+  # Matriz de distancias
+  dist_matrix_cafe <- st_distance(x = train_sf, y = cafes_sf)
+  dim(dist_matrix_cafe)   
 
-# Pasamos cafés y train a objetos sf en 4326
-cafes_sf <- st_as_sf(cafes_geometria, coords = c("x", "y"), crs = 4326)
-train_sf <- st_as_sf(train, coords = c("lon", "lat"), crs = 4326)
+  # Distancia mínima al café más cercano para cada observación
+  dist_min_cafe <- apply(dist_matrix_cafe, 1, min)
 
-# Calculamos la matriz de distancias (propiedades x cafés)
-dist_matrix_cafe <- st_distance(x = train_sf, y = cafes_sf)
-dim(dist_matrix_cafe)   # filas = n de train, columnas = n de cafés
+  train$distancia_cafe <- as.numeric(dist_min_cafe)   # distancia en metros
 
-# Distancia mínima al café más cercano para cada observación
-dist_min_cafe <- apply(dist_matrix_cafe, 1, min)
+  # Scatter con la relación entre el precio del inmueble y distancia a cafes
+  ggplot(train, aes(x = distancia_cafe, y = price)) +
+    geom_point(color = "darkblue", alpha = 0.4) +
+    theme_classic()
 
-# Agregamos la variable directamente a train 
-train$distancia_cafe <- as.numeric(dist_min_cafe)   # en metros
+# ------- Cantidad de cafes en 500 metros
+  # Convertir train y cafés al CRS de metros
+  train_sf_m <- st_transform(train_sf, 3116)
+  cafes_sf_m <- st_transform(cafes_sf, 3116)
 
-# Scatter con la relación entre el precio del inmueble y distancia a cafes
-ggplot(train, aes(x = distancia_cafe, y = price)) +
-  geom_point(color = "darkblue", alpha = 0.4) +
-  theme_classic()
+  # Buffer
+  radio_buffer <- 500
+  train_buffer <- st_buffer(train_sf_m, dist = radio_buffer)
+
+  # Cafes dentro del buffer para cada obs
+  intersections <- st_intersects(train_buffer, cafes_sf_m)
+
+  # Número de cafés en el buffer
+  n_cafes_500m <- lengths(intersections)
+
+  train$n_cafes_500m <- n_cafes_500m
+
+  #Scatter
+  ggplot(train, aes(x = n_cafes_500m, y = price)) +
+    geom_point(color = "darkblue", alpha = 0.4) +
+    theme_classic()
 
 
+# -------- Distancia a bus station
+bus <- opq(bbox = getbb("Bogota Colombia")) |>
+  add_osm_feature(key = "amenity", value = "bus_station")
 
-  # Cantidad de cafes en 500 metros
-# Convertimos train y cafés al CRS de metros
-train_sf_m <- st_transform(train_sf, 3116)
-cafes_sf_m <- st_transform(cafes_sf, 3116)
+  # Simple features
+  bus_sf_raw <- osmdata_sf(bus)
+  bus_geometria <- bus_sf_raw$osm_points |>
+    dplyr::select(osm_id, name)
+  bus_geometria <- st_as_sf(bus_geometria)
 
-# Definimos el radio del buffer en metros
-radio_buffer <- 500  # puedes cambiarlo a 300, 1000, etc.
+  # Coordenadas
+  bus_geometria <- bus_geometria |>
+   mutate(x = st_coordinates(bus_geometria)[, "X"],
+           y = st_coordinates(bus_geometria)[, "Y"])
 
-# Creamos un buffer de 500m alrededor de cada inmueble
-train_buffer <- st_buffer(train_sf_m, dist = radio_buffer)
+  bus_sf <- st_as_sf(bus_geometria, coords = c("x", "y"), crs = 4326)
 
-# Para cada inmueble, lista de cafés que caen dentro del buffer
-intersections <- st_intersects(train_buffer, cafes_sf_m)
+  # Matriz
+  dist_matrix_bus <- st_distance(x = train_sf, y = bus_sf)
+  dim(dist_matrix_bus)
 
-# Número de cafés en 500m alrededor de cada inmueble
-n_cafes_500m <- lengths(intersections)
+  # Distancia mínima a un bus stop para cada observación
+  dist_min_bus <- apply(dist_matrix_bus, 1, min)
+  
+  train$distancia_bus <- as.numeric(dist_min_bus)
 
-# Pasamos de nuevo a data.frame normal y pegamos la nueva variable
-train$n_cafes_500m <- n_cafes_500m
 
-#Scatter
-ggplot(train, aes(x = n_cafes_500m, y = price)) +
-  geom_point(color = "darkblue", alpha = 0.4) +
-  theme_classic()
+# ---------- Distancia a un parque
+parques <- opq(bbox = getbb("Bogota Colombia")) |>
+  add_osm_feature(key = "leisure", value = "park")
+
+  # Simple features
+  parques_sf_raw <- osmdata_sf(parques)
+  parques_geometria <- parques_sf_raw$osm_points |>
+   dplyr::select(osm_id, name)
+  parques_geometria <- st_as_sf(parques_geometria)
+
+  # Coordenadas
+  parques_geometria <- parques_geometria |>
+    mutate(x = st_coordinates(parques_geometria)[, "X"],
+          y = st_coordinates(parques_geometria)[, "Y"])
+  parques_sf <- st_as_sf(parques_geometria, coords = c("x", "y"), crs = 4326)
+
+  # Matriz
+  dist_matrix_parques <- st_distance(x = train_sf, y = parques_sf)
+  dim(dist_matrix_parques)
+
+  # Distancia mínima a un parque por observación
+  dist_min_parque <- apply(dist_matrix_parques, 1, min)
+
+  train$distancia_parque <- as.numeric(dist_min_parque)
+
+# ---------  Iluminación en un buffer
+lamparas <- opq(bbox = getbb("Bogota Colombia")) |>
+  add_osm_feature(key = "highway", value = "street_lamp")
+
+  # sf
+  lamparas_sf_raw <- osmdata_sf(lamparas)
+
+  # Seleccionar puntos
+  lamparas_geometria <- lamparas_sf_raw$osm_points |>
+   dplyr::select(osm_id)
+
+  # sf
+  lamparas_geometria <- st_as_sf(lamparas_geometria)
+
+  # Coordenadas
+  lamparas_geometria <- lamparas_geometria |>
+    mutate(x = st_coordinates(lamparas_geometria)[, "X"],
+          y = st_coordinates(lamparas_geometria)[, "Y"])
+
+  lamparas_sf_m <- st_as_sf(lamparas_geometria, coords = c("x", "y"), crs = 4326) |>
+   st_transform(3116)
+
+  # Buffer
+  radio_buffer <- 200  # metros
+  train_buffer_ilum <- st_buffer(train_sf_m, dist = radio_buffer)
+  intersections_lamps <- st_intersects(train_buffer_ilum, lamparas_sf_m)
+
+  # Cantidad de luces dentro del buffer
+  n_lamparas_200m <- lengths(intersections_lamps)
+
+  train$n_lamparas_200m <- n_lamparas_200m
+
+
+# -------- Zona residencial
+residential <- opq(bbox = getbb("Bogota Colombia")) |>
+  add_osm_feature(key = "landuse", value = "residential")
+
+  # sf
+  residential_sf <- osmdata_sf(residential)
+
+  # Polígonos residenciales
+  residential_polygons <- residential_sf$osm_polygons
+  residential_relation <- st_within(train_sf, residential_polygons)
+
+  # 1 si el inumeble está en zona residencial, 0 si no
+  train$is_residential <- as.integer(lengths(residential_relation) > 0)
 
 
 # Models ------------------------------------------------------------------
