@@ -176,7 +176,13 @@ cafes <- opq(bbox = getbb("Bogota Colombia")) |>
   # Distancia mínima al café más cercano para cada observación
   dist_min_cafe <- apply(dist_matrix_cafe, 1, min)
 
-  train$distancia_cafe <- as.numeric(dist_min_cafe)   # distancia en metros
+  train$distancia_cafe <- as.numeric(dist_min_cafe)
+  
+  #test
+  test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
+  dist_matrix_cafe_test <- st_distance(x = test_sf, y = cafes_sf)
+  dist_min_cafe_test <- apply(dist_matrix_cafe_test, 1, min)
+  test$distancia_cafe <- as.numeric(dist_min_cafe_test)
 
   # Scatter con la relación entre el precio del inmueble y distancia a cafes
   ggplot(train, aes(x = distancia_cafe, y = price)) +
@@ -199,6 +205,14 @@ cafes <- opq(bbox = getbb("Bogota Colombia")) |>
   n_cafes_500m <- lengths(intersections)
 
   train$n_cafes_500m <- n_cafes_500m
+  
+  #test
+  test_sf_m <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326) |>
+    st_transform(3116)
+  test_buffer_cafe <- st_buffer(test_sf_m, dist = radio_buffer)
+  intersections_cafe_test <- st_intersects(test_buffer_cafe, cafes_sf_m)
+  n_cafes_500m_test <- lengths(intersections_cafe_test)
+  test$n_cafes_500m <- n_cafes_500m_test
 
   #Scatter
   ggplot(train, aes(x = n_cafes_500m, y = price)) +
@@ -257,6 +271,12 @@ parques <- opq(bbox = getbb("Bogota Colombia")) |>
   dist_min_parque <- apply(dist_matrix_parques, 1, min)
 
   train$distancia_parque <- as.numeric(dist_min_parque)
+  
+  #test
+  test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
+  dist_matrix_bus_test <- st_distance(x = test_sf, y = bus_sf)
+  dist_min_bus_test <- apply(dist_matrix_bus_test, 1, min)
+  test$distancia_bus <- as.numeric(dist_min_bus_test)
 
 # Iluminación con buffer --------------------------------------------------
   
@@ -290,6 +310,15 @@ lamparas <- opq(bbox = getbb("Bogota Colombia")) |>
   n_lamparas_200m <- lengths(intersections_lamps)
 
   train$n_lamparas_200m <- n_lamparas_200m
+  
+  #test
+  test_sf_m <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326) |>
+    st_transform(3116)
+  test_buffer_ilum <- st_buffer(test_sf_m, dist = radio_buffer)
+  intersections_lamps_test <- st_intersects(test_buffer_ilum, lamparas_sf_m)
+  n_lamparas_200m_test <- lengths(intersections_lamps_test)
+  test$n_lamparas_200m <- n_lamparas_200m_test
+  
 
 # Zona residencial --------------------------------------------------------
 
@@ -305,6 +334,11 @@ residential <- opq(bbox = getbb("Bogota Colombia")) |>
 
   # 1 si el inumeble está en zona residencial, 0 si no
   train$is_residential <- as.integer(lengths(residential_relation) > 0)
+  
+  #test
+  test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
+  residential_relation_test <- st_within(test_sf, residential_polygons)
+  test$is_residential <- as.integer(lengths(residential_relation_test) > 0)
   
 # Cantidad de restaurantes --------------------------------------------------------
   rest <- opq(bbox = getbb("Bogota Colombia")) |>
@@ -356,6 +390,14 @@ residential <- opq(bbox = getbb("Bogota Colombia")) |>
   
   train$distancia_club_social <- as.numeric(dist_min_club)
   
+  #test
+  test_sf_m <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326) |>
+    st_transform(3116)
+  test_buffer_rest <- st_buffer(test_sf_m, dist = radio_buffer)
+  intersections_rest_test <- st_intersects(test_buffer_rest, rest_sf_m)
+  n_restaurants_500m_test <- lengths(intersections_rest_test)
+  test$n_restaurants_500m <- n_restaurants_500m_test
+  
 # Supermercado más cercano --------------------------------------------------------
 
   super_query <- opq(bbox = getbb("Bogota Colombia")) |>
@@ -377,6 +419,12 @@ residential <- opq(bbox = getbb("Bogota Colombia")) |>
   dist_min_super <- apply(dist_matrix_super, 1, min)
 
   train$distancia_supermercado <- as.numeric(dist_min_super)
+  
+  #test
+  test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
+  dist_matrix_super_test <- st_distance(x = test_sf, y = super_sf)
+  dist_min_super_test <- apply(dist_matrix_super_test, 1, min)
+  test$distancia_supermercado <- as.numeric(dist_min_super_test)
   
 # Centro comercial más cercano --------------------------------------------------------
   mall_query <- opq(bbox = getbb("Bogota Colombia")) |>
@@ -408,6 +456,12 @@ residential <- opq(bbox = getbb("Bogota Colombia")) |>
   dist_min_mall <- apply(dist_matrix_mall, 1, min)
   
   train$distancia_mall <- as.numeric(dist_min_mall)
+  
+  #test
+  test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
+  dist_matrix_mall_test <- st_distance(x = test_sf, y = mall_sf)
+  dist_min_mall_test <- apply(dist_matrix_mall_test, 1, min)
+  test$distancia_mall <- as.numeric(dist_min_mall_test)
   
 # Models ------------------------------------------------------------------
 
