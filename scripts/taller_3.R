@@ -182,10 +182,6 @@ train_enriched <- read.csv(paste0(wd_main, wd_data, "/train_enriched2.csv"))  %>
   # Definitve databases
   
   train <- train2 %>%
-    rename(price = price.y,
-           surface_total = surface_total.y,
-           surface_covered = surface_covered.y,
-           OBJECTID = OBJECTID.x) %>%
     select(-c(price.x, surface_total.x, surface_covered.x,
               rooms.x, bedrooms.x, bathrooms.x, RESPONSABL,
               OBJECTID.y, operation_type, title, description, CODIGO_CRI,
@@ -194,14 +190,15 @@ train_enriched <- read.csv(paste0(wd_main, wd_data, "/train_enriched2.csv"))  %>
               SHAPE_Area_12, SHAPE_Length, SHAPE_Area, rooms.y, bedrooms.y,
               bathrooms.y, bedrooms_final_set2, bathrooms_final_set2,
               n_habitaciones_text, n_banos_text,n_garajes_text,
-              area_text_m2, piso_text)) %>% 
-    drop_na(rooms, bedrooms, bathrooms)
-  
-  test <- test2 %>%
+              area_text_m2, piso_text, tipo_inmueble_text_std, property_type)) %>% 
     rename(price = price.y,
            surface_total = surface_total.y,
            surface_covered = surface_covered.y,
-           OBJECTID = OBJECTID.x) %>%
+           OBJECTID = OBJECTID.x,
+           property_type = property_type_final) %>%
+    drop_na(rooms, bedrooms, bathrooms)
+  
+  test <- test2 %>%
     select(-c(price.x, surface_total.x, surface_covered.x,
               rooms.x, bedrooms.x, bathrooms.x, RESPONSABL,
               OBJECTID.y, operation_type, title, description, CODIGO_CRI,
@@ -210,14 +207,19 @@ train_enriched <- read.csv(paste0(wd_main, wd_data, "/train_enriched2.csv"))  %>
               SHAPE_Area_12, SHAPE_Length, SHAPE_Area, rooms.y, bedrooms.y,
               bathrooms.y, bedrooms_final_set2, bathrooms_final_set2,
               n_habitaciones_text, n_banos_text, n_garajes_text,
-              area_text_m2, piso_text)) %>% 
+              area_text_m2, piso_text, tipo_inmueble_text_std, property_type)) %>% 
+    rename(price = price.y,
+           surface_total = surface_total.y,
+           surface_covered = surface_covered.y,
+           OBJECTID = OBJECTID.x,
+           property_type = property_type_final) %>%
     drop_na(rooms, bedrooms, bathrooms)
   
   # Variable creation
   
-  train <- train %>%
-    drop_na(price, surface_total) %>% 
-    mutate(p_msq = price/surface_total)
+#  train <- train %>%
+#    drop_na(price, surface_total) %>% 
+#    mutate(p_msq = price/surface_total)
   
 
   # Creating map visualization
@@ -241,33 +243,33 @@ train_enriched <- read.csv(paste0(wd_main, wd_data, "/train_enriched2.csv"))  %>
 
   # Precio metro cuadrado apartamentos
   
-  ggplot() +
-    geom_sf(data = upz, fill = "gray95", color = "black") +
-    geom_sf(data = train %>% 
-            dplyr::filter(property_type == "Apartamento"),
-            aes(color = p_msq),
-            shape = 16, size = 0.8, alpha = 0.7) +
-    scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
-    theme_minimal() +
-    theme(axis.text = element_blank(),
-          axis.title = element_blank(),
-          legend.position = "right") +
-  labs(title = "Precio por metro cuadrado — Apartamento")
+#  ggplot() +
+#    geom_sf(data = upz, fill = "gray95", color = "black") +
+#    geom_sf(data = train %>% 
+#            dplyr::filter(property_type == "Apartamento"),
+#            aes(color = p_msq),
+#            shape = 16, size = 0.8, alpha = 0.7) +
+#    scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
+#    theme_minimal() +
+#    theme(axis.text = element_blank(),
+#          axis.title = element_blank(),
+#          legend.position = "right") +
+#  labs(title = "Precio por metro cuadrado — Apartamento")
   
   # Precio metro cuadrado casas
   
-  ggplot() +
-    geom_sf(data = upz, fill = "gray95", color = "black") +
-    geom_sf(data = train %>% 
-            dplyr::filter(property_type == "Casa"),
-            aes(color = p_msq),
-            shape = 16, size = 0.8, alpha = 0.7) +
-    scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
-    theme_minimal() +
-    theme(axis.text = element_blank(),
-          axis.title = element_blank(),
-          legend.position = "right") +
-    labs(title = "Precio por metro cuadrado — Casas")
+#  ggplot() +
+#    geom_sf(data = upz, fill = "gray95", color = "black") +
+#    geom_sf(data = train %>% 
+#            dplyr::filter(property_type == "Casa"),
+#            aes(color = p_msq),
+#            shape = 16, size = 0.8, alpha = 0.7) +
+#    scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
+#    theme_minimal() +
+#    theme(axis.text = element_blank(),
+#          axis.title = element_blank(),
+#          legend.position = "right") +
+#    labs(title = "Precio por metro cuadrado — Casas")
  
   # Distribución viviendas por UPZ
  
