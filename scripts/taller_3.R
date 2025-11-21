@@ -8,7 +8,7 @@ library(pacman)
 p_load(rio, writexl, readxl, tidyverse, caret, ggplot,
        reticulate, tidymodels, sf, gt, gtsummary, osmdata,
        gridExtra, plotly, 
-       skimr, leaflet)
+       skimr, leaflet, lwgeom)
 
 # Establishing paths ------------------------------------------------------
 
@@ -23,8 +23,16 @@ test_palabras <- read.csv(paste0(wd_main, wd_data, "/test_enriched2.csv"))
 train_palabras <- read.csv(paste0(wd_main, wd_data, "/train_enriched2.csv"))
 test <- read.csv(paste0(wd_main, wd_data, "/test.csv"))
 train <- read.csv(paste0(wd_main, wd_data, "/train.csv"))
-localidades <- st_read(paste0(wd_main, wd_data, "/localidades.geojson"))
+
 upz <- st_read(paste0(wd_main, wd_data, "/IndUPZ.json"))
+estratos <- st_read(paste0(wd_main, wd_data, "/estratos"))
+
+test_enriched <- read.csv(paste0(wd_main, wd_data, "/test_enriched2.csv")) %>% 
+  select(-c("city", "month", "year", "property_type", "operation_type", "lat", "lon", "title",
+            "description", "description_raw"))
+train_enriched <- read.csv(paste0(wd_main, wd_data, "/train_enriched2.csv"))  %>% 
+  select(-c("city", "month", "year", "property_type", "operation_type", "lat", "lon", "title",
+            "description", "description_raw"))
 
 # Data --------------------------------------------------------------------
 
@@ -32,12 +40,15 @@ upz <- st_read(paste0(wd_main, wd_data, "/IndUPZ.json"))
 
   train$property_type <- as.factor(train$property_type)
   test$property_type <- as.factor(test$property_type)
+  
+  train$year <- as.factor(train$year)
+  test$year <- as.factor(test$year)
 
 # Missing values
 
   missings <- skim(train) %>% 
     select(skim_variable, n_missing) %>% 
-    filter(n_missing!= 0)
+    dplyr::filter(n_missing!= 0)
 
 # Early exploration
 
@@ -60,22 +71,156 @@ upz <- st_read(paste0(wd_main, wd_data, "/IndUPZ.json"))
     ylab("Precio") +
     theme_minimal() +
     theme(legend.position = "none")
-
+  
 # Spatial modeling --------------------------------------------------------
   
-  train_sf <- train_nm %>% 
-    st_as_sf(coords = c("lon", "lat"), crs = 4626)
-  upz <- st_transform(upz, 4626)
-  localidades <- st_transform(localidades, 4626)
+  train <- train %>% 
+    st_as_sf(coords = c("lon", "lat"), crs = 4326)
   
-  train_upz <- st_join(train_sf, upz, join = st_intersects)
-  train_full <- st_join(localidades, train_upz, join = st_intersects)
+  test <- test %>% 
+    st_as_sf(coords = c("lon", "lat"), crs = 4326)
 
+  # Joining with Estrato
+  
+  estratos <- st_transform(estratos, st_crs(train))
+  estratos <- st_make_valid(estratos)
+  
+  train <- st_join(train, estratos, join = st_intersects, left = FALSE)
+  test  <- st_join(test,  estratos, join = st_intersects, left = FALSE)
+  
+  # Joining with UPZ
+  upz <- st_transform(upz, 4326)
+  
+  train <- st_join(train, upz, join = st_intersects)
+  test <- st_join(test, upz, join = st_intersects)
+
+  # Joining two dataframes
+  
+  train <- left_join(train, train_enriched, by = "property_id")
+  test <- left_join(test, test_enriched, by = "property_id")
+
+  # Data cleaning
+  
+  train <- train %>% 
+    mutate(year = as.factor(year),
+           property_type = as.factor(property_type),
+           CODIGO_UPZ = as.factor(CODIGO_UPZ),
+           NOMBRE = as.factor(NOMBRE))
+  
+  test <- test %>% 
+    mutate(year = as.factor(year),
+           property_type = as.factor(property_type),
+           CODIGO_UPZ = as.factor(CODIGO_UPZ),
+           NOMBRE = as.factor(NOMBRE))
+
+  # Room imputation
+  
+  train_rooms <- train %>%
+    st_drop_geometry() %>%                             
+    group_by(month, year, property_type, CODIGO_UPZ) %>% 
+    summarise(
+      rooms_mean     = round(mean(rooms.y,     na.rm = TRUE)),
+      bedrooms_mean  = round(mean(bedrooms.y,  na.rm = TRUE)),
+      bathrooms_mean = round(mean(bathrooms.y, na.rm = TRUE)),
+      .groups = "drop"
+    )
+  
+  train2 <- train %>%
+    left_join(train_rooms,
+              by = c("month", "year", "property_type", "CODIGO_UPZ")) %>%
+    mutate(
+      rooms     = coalesce(rooms.y,     rooms_mean),
+      bedrooms  = coalesce(bedrooms.y,  bedrooms_mean),
+      bathrooms = coalesce(bathrooms.y, bathrooms_mean)
+    ) %>%
+    select(-rooms_mean, -bedrooms_mean, -bathrooms_mean)
+  
+  # Evaluación imputación train
+  
+  missings_train <- skim(train) %>% 
+    select(skim_variable, n_missing) %>% 
+    dplyr::filter(n_missing!= 0) %>% 
+    arrange(n_missing)
+  
+  missings_train2 <- skim(train2) %>% 
+    select(skim_variable, n_missing) %>% 
+    dplyr::filter(n_missing!= 0) %>% 
+    arrange(n_missing)
+
+  # Evaluación imputación test
+  
+  test_rooms <- test %>%
+    st_drop_geometry() %>%                             
+    group_by(month, year, property_type, CODIGO_UPZ) %>% 
+    summarise(
+      rooms_mean     = round(mean(rooms.y,     na.rm = TRUE)),
+      bedrooms_mean  = round(mean(bedrooms.y,  na.rm = TRUE)),
+      bathrooms_mean = round(mean(bathrooms.y, na.rm = TRUE)),
+      .groups = "drop"
+    )
+  
+  test2 <- test %>%
+    left_join(test_rooms,
+              by = c("month", "year", "property_type", "CODIGO_UPZ")) %>%
+    mutate(
+      rooms     = coalesce(rooms.y,     rooms_mean),
+      bedrooms  = coalesce(bedrooms.y,  bedrooms_mean),
+      bathrooms = coalesce(bathrooms.y, bathrooms_mean)
+    ) %>%
+    select(-rooms_mean, -bedrooms_mean, -bathrooms_mean)
+
+  # Evaluación imputación tests
+  
+  missings_test <- skim(test) %>% 
+    select(skim_variable, n_missing) %>% 
+    dplyr::filter(n_missing!= 0) %>% 
+    arrange(n_missing)
+  
+  missings_test2 <- skim(test2) %>% 
+    select(skim_variable, n_missing) %>% 
+    dplyr::filter(n_missing!= 0) %>% 
+    arrange(n_missing)
+  
+  # Definitve databases
+  
+  train <- train2 %>%
+    rename(price = price.y,
+           surface_total = surface_total.y,
+           surface_covered = surface_covered.y,
+           OBJECTID = OBJECTID.x) %>%
+    select(-c(price.x, surface_total.x, surface_covered.x,
+              rooms.x, bedrooms.x, bathrooms.x, RESPONSABL,
+              OBJECTID.y, operation_type, title, description, CODIGO_CRI,
+              NORMATIVA, ACTO_ADMIN, NUMERO_ACT, FECHA_ACTO, ESCALA_CAP,
+              FECHA_CAPT, SHAPE_Area_1, SHAPE_Length_1, SHAPE_Length_12,
+              SHAPE_Area_12, SHAPE_Length, SHAPE_Area, rooms.y, bedrooms.y,
+              bathrooms.y, bedrooms_final_set2, bathrooms_final_set2,
+              n_habitaciones_text, n_banos_text,n_garajes_text,
+              area_text_m2, piso_text)) %>% 
+    drop_na(rooms, bedrooms, bathrooms)
+  
+  test <- test2 %>%
+    rename(price = price.y,
+           surface_total = surface_total.y,
+           surface_covered = surface_covered.y,
+           OBJECTID = OBJECTID.x) %>%
+    select(-c(price.x, surface_total.x, surface_covered.x,
+              rooms.x, bedrooms.x, bathrooms.x, RESPONSABL,
+              OBJECTID.y, operation_type, title, description, CODIGO_CRI,
+              NORMATIVA, ACTO_ADMIN, NUMERO_ACT, FECHA_ACTO, ESCALA_CAP,
+              FECHA_CAPT, SHAPE_Area_1, SHAPE_Length_1, SHAPE_Length_12,
+              SHAPE_Area_12, SHAPE_Length, SHAPE_Area, rooms.y, bedrooms.y,
+              bathrooms.y, bedrooms_final_set2, bathrooms_final_set2,
+              n_habitaciones_text, n_banos_text, n_garajes_text,
+              area_text_m2, piso_text)) %>% 
+    drop_na(rooms, bedrooms, bathrooms)
+  
   # Variable creation
   
-  train_sf <- train_sf %>% 
-    mutate(p_msq = price/surface_total) %>% 
-    drop_na(p_msq)
+  train <- train %>%
+    drop_na(price, surface_total) %>% 
+    mutate(p_msq = price/surface_total)
+  
 
   # Creating map visualization
   
@@ -96,15 +241,12 @@ upz <- st_read(paste0(wd_main, wd_data, "/IndUPZ.json"))
   #              opacity = 1,
   #              radius = 1)
 
-  
-  # Mapa con UPZ 
-
   # Precio metro cuadrado apartamentos
   
   ggplot() +
     geom_sf(data = upz, fill = "gray95", color = "black") +
-    geom_sf(data = train_sf %>% 
-              filter(property_type == "Apartamento"),
+    geom_sf(data = train %>% 
+            dplyr::filter(property_type == "Apartamento"),
             aes(color = p_msq),
             shape = 16, size = 0.8, alpha = 0.7) +
     scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
@@ -118,8 +260,8 @@ upz <- st_read(paste0(wd_main, wd_data, "/IndUPZ.json"))
   
   ggplot() +
     geom_sf(data = upz, fill = "gray95", color = "black") +
-    geom_sf(data = train_sf %>% 
-              filter(property_type == "Casa"),
+    geom_sf(data = train %>% 
+            dplyr::filter(property_type == "Casa"),
             aes(color = p_msq),
             shape = 16, size = 0.8, alpha = 0.7) +
     scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
@@ -133,15 +275,8 @@ upz <- st_read(paste0(wd_main, wd_data, "/IndUPZ.json"))
  
   ggplot() +
     geom_sf(data = upz, fill = "gray95", color = "black") +
-    geom_sf(data = train_upz, aes(color = as.factor(CODIGO_UPZ)))
-  
-  # Distribución viviendas por localidad
-  
-  ggplot() +
-    geom_sf(data = localidades, fill = "gray95", color = "black") +
-    geom_sf(data = train_full, aes(color = as.factor(LocNombre)))
-  
-    
+    geom_sf(data = train, aes(color = as.factor(CODIGO_UPZ)))
+
 # Spatial data ------------------------------------------------------------
 
 osmdata::available_features()
@@ -169,22 +304,16 @@ cafes <- opq(bbox = getbb("Bogota Colombia")) |>
 
   # Objetos sf en 4326
   cafes_sf <- st_as_sf(cafes_geometria, coords = c("x", "y"), crs = 4326)
-  train_sf <- st_as_sf(train, coords = c("lon", "lat"), crs = 4326)
+  train <- st_as_sf(train, coords = c("lon", "lat"), crs = 4326)
 
   # Matriz de distancias
-  dist_matrix_cafe <- st_distance(x = train_sf, y = cafes_sf)
+  dist_matrix_cafe <- st_distance(x = train, y = cafes_sf)
   dim(dist_matrix_cafe)   
 
   # Distancia mínima al café más cercano para cada observación
   dist_min_cafe <- apply(dist_matrix_cafe, 1, min)
 
-  train$distancia_cafe <- as.numeric(dist_min_cafe)
-  
-  #test
-  test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
-  dist_matrix_cafe_test <- st_distance(x = test_sf, y = cafes_sf)
-  dist_min_cafe_test <- apply(dist_matrix_cafe_test, 1, min)
-  test$distancia_cafe <- as.numeric(dist_min_cafe_test)
+  train$distancia_cafe <- as.numeric(dist_min_cafe)   # distancia en metros
 
   # Scatter con la relación entre el precio del inmueble y distancia a cafes
   ggplot(train, aes(x = distancia_cafe, y = price)) +
@@ -193,12 +322,12 @@ cafes <- opq(bbox = getbb("Bogota Colombia")) |>
 
 # ------- Cantidad de cafes en 500 metros
   # Convertir train y cafés al CRS de metros
-  train_sf_m <- st_transform(train_sf, 3116)
+  train_m <- st_transform(train, 3116)
   cafes_sf_m <- st_transform(cafes_sf, 3116)
 
   # Buffer
   radio_buffer <- 500
-  train_buffer <- st_buffer(train_sf_m, dist = radio_buffer)
+  train_buffer <- st_buffer(train_m, dist = radio_buffer)
 
   # Cafes dentro del buffer para cada obs
   intersections <- st_intersects(train_buffer, cafes_sf_m)
@@ -207,14 +336,6 @@ cafes <- opq(bbox = getbb("Bogota Colombia")) |>
   n_cafes_500m <- lengths(intersections)
 
   train$n_cafes_500m <- n_cafes_500m
-  
-  #test
-  test_sf_m <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326) |>
-    st_transform(3116)
-  test_buffer_cafe <- st_buffer(test_sf_m, dist = radio_buffer)
-  intersections_cafe_test <- st_intersects(test_buffer_cafe, cafes_sf_m)
-  n_cafes_500m_test <- lengths(intersections_cafe_test)
-  test$n_cafes_500m <- n_cafes_500m_test
 
   #Scatter
   ggplot(train, aes(x = n_cafes_500m, y = price)) +
@@ -240,7 +361,7 @@ bus <- opq(bbox = getbb("Bogota Colombia")) |>
   bus_sf <- st_as_sf(bus_geometria, coords = c("x", "y"), crs = 4326)
 
   # Matriz
-  dist_matrix_bus <- st_distance(x = train_sf, y = bus_sf)
+  dist_matrix_bus <- st_distance(x = train, y = bus_sf)
   dim(dist_matrix_bus)
 
   # Distancia mínima a un bus stop para cada observación
@@ -250,35 +371,29 @@ bus <- opq(bbox = getbb("Bogota Colombia")) |>
 
 # Distancia a parque más cercano ------------------------------------------
 
-parques <- opq(bbox = getbb("Bogota Colombia")) |>
-  add_osm_feature(key = "leisure", value = "park")
+#parques <- opq(bbox = getbb("Bogota Colombia")) |>
+  #add_osm_feature(key = "leisure", value = "park")
 
   # Simple features
-  parques_sf_raw <- osmdata_sf(parques)
-  parques_geometria <- parques_sf_raw$osm_points |>
-   dplyr::select(osm_id, name)
-  parques_geometria <- st_as_sf(parques_geometria)
+  #parques_sf_raw <- osmdata_sf(parques)
+  #parques_geometria <- parques_sf_raw$osm_points |>
+   #dplyr::select(osm_id, name)
+  #parques_geometria <- st_as_sf(parques_geometria)
 
   # Coordenadas
-  parques_geometria <- parques_geometria |>
-    mutate(x = st_coordinates(parques_geometria)[, "X"],
-          y = st_coordinates(parques_geometria)[, "Y"])
-  parques_sf <- st_as_sf(parques_geometria, coords = c("x", "y"), crs = 4326)
+  #parques_geometria <- parques_geometria |>
+   # mutate(x = st_coordinates(parques_geometria)[, "X"],
+    #      y = st_coordinates(parques_geometria)[, "Y"])
+  #parques_sf <- st_as_sf(parques_geometria, coords = c("x", "y"), crs = 4326)
 
   # Matriz
-  dist_matrix_parques <- st_distance(x = train_sf, y = parques_sf)
-  dim(dist_matrix_parques)
+  #dist_matrix_parques <- st_distance(x = train, y = parques_sf)
+  #dim(dist_matrix_parques)
 
   # Distancia mínima a un parque por observación
-  dist_min_parque <- apply(dist_matrix_parques, 1, min)
+  #dist_min_parque <- apply(dist_matrix_parques, 1, min)
 
-  train$distancia_parque <- as.numeric(dist_min_parque)
-  
-  #test
-  test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
-  dist_matrix_bus_test <- st_distance(x = test_sf, y = bus_sf)
-  dist_min_bus_test <- apply(dist_matrix_bus_test, 1, min)
-  test$distancia_bus <- as.numeric(dist_min_bus_test)
+  #train$distancia_parque <- as.numeric(dist_min_parque)
 
 # Iluminación con buffer --------------------------------------------------
   
@@ -305,22 +420,13 @@ lamparas <- opq(bbox = getbb("Bogota Colombia")) |>
 
   # Buffer
   radio_buffer <- 200  # metros
-  train_buffer_ilum <- st_buffer(train_sf_m, dist = radio_buffer)
+  train_buffer_ilum <- st_buffer(train_m, dist = radio_buffer)
   intersections_lamps <- st_intersects(train_buffer_ilum, lamparas_sf_m)
 
   # Cantidad de luces dentro del buffer
   n_lamparas_200m <- lengths(intersections_lamps)
 
   train$n_lamparas_200m <- n_lamparas_200m
-  
-  #test
-  test_sf_m <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326) |>
-    st_transform(3116)
-  test_buffer_ilum <- st_buffer(test_sf_m, dist = radio_buffer)
-  intersections_lamps_test <- st_intersects(test_buffer_ilum, lamparas_sf_m)
-  n_lamparas_200m_test <- lengths(intersections_lamps_test)
-  test$n_lamparas_200m <- n_lamparas_200m_test
-  
 
 # Zona residencial --------------------------------------------------------
 
@@ -332,139 +438,11 @@ residential <- opq(bbox = getbb("Bogota Colombia")) |>
 
   # Polígonos residenciales
   residential_polygons <- residential_sf$osm_polygons
-  residential_relation <- st_within(train_sf, residential_polygons)
+  residential_relation <- st_within(train, residential_polygons)
 
   # 1 si el inumeble está en zona residencial, 0 si no
   train$is_residential <- as.integer(lengths(residential_relation) > 0)
-  
-  #test
-  test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
-  residential_relation_test <- st_within(test_sf, residential_polygons)
-  test$is_residential <- as.integer(lengths(residential_relation_test) > 0)
-  
-# Cantidad de restaurantes --------------------------------------------------------
-  rest <- opq(bbox = getbb("Bogota Colombia")) |>
-    add_osm_feature(key = "amenity", value = "restaurant")
-  
-  # sf
-  rest_sf_raw <- osmdata_sf(rest)
-  rest_geometria <- rest_sf_raw$osm_points |>
-    dplyr::select(osm_id, name)
-  rest_geometria <- st_as_sf(rest_geometria)
-  
-  # Coordenadas
-  rest_geometria <- rest_geometria |>
-    mutate(
-      x = st_coordinates(rest_geometria)[, "X"],
-      y = st_coordinates(rest_geometria)[, "Y"]
-    )
-  
-  # Restaurantes en metros
-  rest_sf_m  <- st_as_sf(rest_geometria, coords = c("x", "y"), crs = 4326) |>
-    st_transform(3116)
-  
-  # Buffer
-  radio_buffer <- 500
-  train_buffer_rest <- st_buffer(train_sf_m, dist = radio_buffer)
-  intersections_rest <- st_intersects(train_buffer_rest, rest_sf_m)
-  n_restaurants_500m <- lengths(intersections_rest)
-  
-  train$n_restaurants_500m <- n_restaurants_500m
-  
-# Distancia a club --------------------------------------------------------
-  club_social <- opq(bbox = getbb("Bogota Colombia")) |>
-    add_osm_feature(key = "club", value = "social")
 
-  club_social_sf_raw <- osmdata_sf(club_social)
-  club_social_geometria <- club_social_sf_raw$osm_points |>
-    dplyr::select(osm_id, name)
-  
-  club_social_geometria <- st_as_sf(club_social_geometria) |>
-    mutate(
-      x = st_coordinates(geometry)[, "X"],
-      y = st_coordinates(geometry)[, "Y"]
-    )
-  
-  club_social_sf <- st_as_sf(club_social_geometria, coords = c("x", "y"), crs = 4326)
-
-  dist_matrix_club <- st_distance(x = train_sf, y = club_social_sf)
-  dist_min_club <- apply(dist_matrix_club, 1, min)
-  
-  train$distancia_club_social <- as.numeric(dist_min_club)
-  
-  #test
-  test_sf_m <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326) |>
-    st_transform(3116)
-  test_buffer_rest <- st_buffer(test_sf_m, dist = radio_buffer)
-  intersections_rest_test <- st_intersects(test_buffer_rest, rest_sf_m)
-  n_restaurants_500m_test <- lengths(intersections_rest_test)
-  test$n_restaurants_500m <- n_restaurants_500m_test
-  
-# Supermercado más cercano --------------------------------------------------------
-
-  super_query <- opq(bbox = getbb("Bogota Colombia")) |>
-    add_osm_feature(key = "shop", value = "supermarket")
-  
-  super_sf_raw <- osmdata_sf(super_query)
-  super_geometria <- super_sf_raw$osm_points |>
-    dplyr::select(osm_id, name)
-
-  super_geometria <- st_as_sf(super_geometria) |>
-    mutate(
-      x = st_coordinates(geometry)[, "X"],
-      y = st_coordinates(geometry)[, "Y"]
-    )
-
-  super_sf <- st_as_sf(super_geometria, coords = c("x", "y"), crs = 4326)
-  
-  dist_matrix_super <- st_distance(x = train_sf, y = super_sf)
-  dist_min_super <- apply(dist_matrix_super, 1, min)
-
-  train$distancia_supermercado <- as.numeric(dist_min_super)
-  
-  #test
-  test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
-  dist_matrix_super_test <- st_distance(x = test_sf, y = super_sf)
-  dist_min_super_test <- apply(dist_matrix_super_test, 1, min)
-  test$distancia_supermercado <- as.numeric(dist_min_super_test)
-  
-# Centro comercial más cercano --------------------------------------------------------
-  mall_query <- opq(bbox = getbb("Bogota Colombia")) |>
-    add_osm_feature(key = "shop", value = "mall")
-  
-  mall_sf_raw <- osmdata_sf(mall_query)
-  
-  if (!is.null(mall_sf_raw$osm_points) && nrow(mall_sf_raw$osm_points) > 0) {
-    
-    mall_geometria <- mall_sf_raw$osm_points |>
-      dplyr::select(osm_id, name, geometry)
-    
-  } else {
-    
-    mall_geometria <- mall_sf_raw$osm_polygons |>
-      dplyr::select(osm_id, name, geometry) |>
-      st_centroid()
-  }
-  
-  mall_geometria <- st_as_sf(mall_geometria) |>
-    mutate(
-      x = st_coordinates(geometry)[, "X"],
-      y = st_coordinates(geometry)[, "Y"]
-    )
-  
-  mall_sf  <- st_as_sf(mall_geometria, coords = c("x", "y"), crs = 4326)
-
-  dist_matrix_mall <- st_distance(x = train_sf, y = mall_sf)
-  dist_min_mall <- apply(dist_matrix_mall, 1, min)
-  
-  train$distancia_mall <- as.numeric(dist_min_mall)
-  
-  #test
-  test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
-  dist_matrix_mall_test <- st_distance(x = test_sf, y = mall_sf)
-  dist_min_mall_test <- apply(dist_matrix_mall_test, 1, min)
-  test$distancia_mall <- as.numeric(dist_min_mall_test)
-  
 # Models ------------------------------------------------------------------
 
 
