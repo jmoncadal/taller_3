@@ -31,9 +31,16 @@ spacy_download_langmodel(
 # Descargamos el modelo de lenguaje.
 spacy_initialize(model = "es_core_news_lg")
 
+# Establishing paths ------------------------------------------------------
+
+wd_main <- "C:/Users/Juan/OneDrive - Universidad de los andes/Escritorio/Universidad/Posgrado/1. Primer Semestre/Big Data y Machine Learning/Trabajos/taller_3"
+wd_data <- "/stores"
+wd_code <- "/scripts"
+wd_output <- "/views"
 # DATA ================================
-test <- read_csv("stores/test.csv")
-train <- read_csv("stores/train.csv")
+test <- read_csv(paste0(wd_main, wd_data, "/test.csv"))
+train <- read_csv(paste0(wd_main, wd_data, "/train.csv"))
+
 # Limpieza y creación para train y test
 
 
@@ -70,39 +77,13 @@ train_desc_spacy <- spacy_parse(
   dependency = FALSE
 )
 
-# --- spaCy entity  = TRUE,
-  dependency = FALSE
-)
-
-# Solucaion
-
-library(reticulate)
-library(spacyr)
-
-# Make sure no old override is active
-Sys.unsetenv("RETICULATE_PYTHON")
-spacy_finalize()  # just in case
-
-settings <- spacy_systemsettings()
-settings$settings_file
-
-train_desc_spacy <- spacy_parse(
-  x       = train$description_raw,
-  doc_id  = train$property_id,
-  lemma   = TRUE,
-  pos     = TRUE,
-  tag     = FALSE,
-  entity  = TRUE,
-  dependency = FALSE
-)
- sobre DESCRIPTION (test) ---
 test_desc_spacy <- spacy_parse(
   x       = test$description_raw,
   doc_id  = test$property_id,
   lemma   = TRUE,
   pos     = TRUE,
   tag     = FALSE,
- 
-  rm(list = ls())
-  
+  entity = TRUE,
+  dependency = FALSE
+)
   
