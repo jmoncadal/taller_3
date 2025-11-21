@@ -5,20 +5,22 @@ rm(list = ls())
 # Importing libraries -----------------------------------------------------
 
 library(pacman)
-p_load(rio, writexl, readxl, tidyverse, caret, keras,
+p_load(rio, writexl, readxl, tidyverse, caret, ggplot,
        reticulate, tidymodels, sf, gt, gtsummary, osmdata,
        gridExtra, plotly, 
        skimr, leaflet)
 
 # Establishing paths ------------------------------------------------------
 
-wd_main <- "/Users/marianacorrea/Desktop/PEG/Big data/taller_3"
+wd_main <- "C:/Users/marce/Documents/Andes/taller_3/taller_3"
 wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
 
 # Importing data ----------------------------------------------------------
 
+test_palabras <- read.csv(paste0(wd_main, wd_data, "/test_enriched2.csv"))
+train_palabras <- read.csv(paste0(wd_main, wd_data, "/train_enriched2.csv"))
 test <- read.csv(paste0(wd_main, wd_data, "/test.csv"))
 train <- read.csv(paste0(wd_main, wd_data, "/train.csv"))
 localidades <- st_read(paste0(wd_main, wd_data, "/localidades.geojson"))
