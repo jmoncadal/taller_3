@@ -587,4 +587,25 @@ test <- read_xlsx(paste0(wd_main, wd_data, "/test_final.xlsx"))
 train <- read_xlsx(paste0(wd_main, wd_data, "/train_final.xlsx"))
 }
 
+# Cross validation folds ---------------------------------------------------
 
+p_load("spatialsample")
+
+p_load("caret")
+
+localidades <- st_read(paste0(wd_main, wd_data, "/localidades.geojson"))
+localidades <- st_transform(localidades, 4326)
+
+train_sf <- st_join(
+  train,
+  localidades %>% select(LocCodigo, LocNombre),
+  left = TRUE
+)
+
+set.seed(123)
+
+location_folds  <- spatial_leave_location_out_cv(
+  data  = train_sf,
+  group = LocCodigo  # o LocNombre, como prefieras agrupar
+  # v = dplyr::n_distinct(train_sf$LocCodigo)  # opcional, número de folds
+)
