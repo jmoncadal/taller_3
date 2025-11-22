@@ -12,12 +12,12 @@ p_load(rio, writexl, readxl, tidyverse, caret, keras,
 
 # Establishing paths ------------------------------------------------------
 
-wd_main <- "C:/Users/marce/Documents/Andes/taller_3/taller_3"
+wd_main <- "C:/Users/marce/Documents/Andes/taller 3/taller_3"
 wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
 
-correr <- 0
+correr <- 1
 
 # Importing data ----------------------------------------------------------
 if (correr == 1){
@@ -33,6 +33,8 @@ if (correr == 1){
   train_enriched <- read.csv(paste0(wd_main, wd_data, "/train_enriched2.csv"))  %>% 
     select(-c("city", "month", "year", "property_type", "operation_type", "lat", "lon", "title",
               "description", "description_raw"))
+  
+  catastro <- read_xlsx(paste0(wd_main, wd_data, "/consolidado_localidades.xlsx"))
   
   # Data --------------------------------------------------------------------
   
@@ -236,7 +238,25 @@ if (correr == 1){
   # 2. Imputar categóricas por moda condicional
   train2 <- impute_categorical_by_cat(
     data      = train,
-    cat_vars  = c("ESTRATO", "rooms.y", "bedrooms_final_set2", "bathrooms_final_set2"),
+    cat_vars  = c("ESTRATO"),
+    group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+  )
+  
+  train2 <- impute_categorical_by_cat(
+    data      = train2,
+    cat_vars  = c("rooms.y"),
+    group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+  )
+  
+  train2 <- impute_categorical_by_cat(
+    data      = train2,
+    cat_vars  = c("bedrooms_final_set2"),
+    group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+  )
+  
+  train2 <- impute_categorical_by_cat(
+    data      = train2,
+    cat_vars  = c("bathrooms_final_set2"),
     group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
   )
   
@@ -276,36 +296,16 @@ if (correr == 1){
   # Definitve databases
   
   train <- train2 %>%
-    select(-c(price.x, surface_total.x, surface_covered.x,
-              rooms.x, bedrooms.x, bathrooms.x, RESPONSABL,
-              OBJECTID.y, operation_type, title, description, CODIGO_CRI,
-              NORMATIVA, ACTO_ADMIN, NUMERO_ACT, FECHA_ACTO, ESCALA_CAP,
-              FECHA_CAPT, SHAPE_Area_1, SHAPE_Length_1, SHAPE_Length_12,
-              SHAPE_Area_12, SHAPE_Length, SHAPE_Area, rooms.y, bedrooms.y,
-              bathrooms.y, bedrooms_final_set2, bathrooms_final_set2,
-              n_habitaciones_text, n_banos_text,n_garajes_text,
-              area_text_m2, piso_text, tipo_inmueble_text_std, property_type)) %>% 
     rename(price = price.y,
            surface_total = surface_total.y,
            surface_covered = surface_covered.y,
-           OBJECTID = OBJECTID.x,
-           property_type = property_type_final)
+           OBJECTID = OBJECTID.x)
   
   test <- test2 %>%
-    select(-c(price.x, surface_total.x, surface_covered.x,
-              rooms.x, bedrooms.x, bathrooms.x, RESPONSABL,
-              OBJECTID.y, operation_type, title, description, CODIGO_CRI,
-              NORMATIVA, ACTO_ADMIN, NUMERO_ACT, FECHA_ACTO, ESCALA_CAP,
-              FECHA_CAPT, SHAPE_Area_1, SHAPE_Length_1, SHAPE_Length_12,
-              SHAPE_Area_12, SHAPE_Length, SHAPE_Area, rooms.y, bedrooms.y,
-              bathrooms.y, bedrooms_final_set2, bathrooms_final_set2,
-              n_habitaciones_text, n_banos_text, n_garajes_text,
-              area_text_m2, piso_text, tipo_inmueble_text_std, property_type)) %>% 
     rename(price = price.y,
            surface_total = surface_total.y,
            surface_covered = surface_covered.y,
-           OBJECTID = OBJECTID.x,
-           property_type = property_type_final)
+           OBJECTID = OBJECTID.x)
   
   # Spatial modeling --------------------------------------------------------
   
@@ -625,26 +625,26 @@ for(i in 1:nrow(location_folds)){
 fitControl<-trainControl(method ="cv",
                          index=folds)
 
-# Model
+# Model ------------------------------------------
 
-# OLS
+# OLS **********************
 
 OLS<-train(log(price) ~ 
              ESTRATO +
-             tiene_terraza +
+             factor(tiene_terraza) +
              property_type +
-             garaje_indep_text +
-             garaje_cubierto_text +
-             terraza_propia +
-             sala_comedor_conjunto +
-             tiene_sala +
-             cocina_integral +
+             factor(garaje_indep_text) +
+             factor(garaje_cubierto_text) +
+             factor(terraza_propia) +
+             factor(sala_comedor_conjunto) +
+             factor(tiene_sala) +
+             factor(cocina_integral) +
              n_lamparas_200m +
              menciona_cercania_txt +
              tiene_balcon +
              tiene_patio_ropas +
              cocina_abierta +
-             menciona_cuadras_txt +
+             factor(menciona_cuadras_txt) +
              n_cafes_500m +
              tiene_vigilancia_text +
              cercania_bus_text +
@@ -652,7 +652,7 @@ OLS<-train(log(price) ~
              remodelada_text +
              distancia_bus +
              n_palabras_title,
-           data=train,
+           data=train_sf,
            method = 'lm', 
            trControl = fitControl,
            metric = "MAE"
@@ -670,10 +670,45 @@ predictSample <- test %>%
 predictSample <- predictSample %>% 
   st_drop_geometry()
 
-# Subido
+# * Subido * 
 write.csv(predictSample,paste0(wd_main, wd_output,"/estimacion_ols_inicial.csv"), row.names = FALSE)
 
-# Model 2 OLS
+# Model 2 OLS*****************
+
+# -----------------
+# Proceso en el medio
+catastro <- read_xlsx(paste0(wd_main, wd_data, "/consolidado_localidades.xlsx"))
+
+catastro_long <- catastro |>
+  pivot_longer(
+    cols = c(Casa, Apartamento),          # columnas de precios
+    names_to = "property_type",           # nombre del tipo de vivienda
+    values_to = "precio_catastro_prom"    # valor numérico
+  )
+
+train_sf <- train_sf |>
+  left_join(
+    catastro_long,
+    by = c("LocNombre", "property_type")
+  )
+
+train_sf <- impute_numeric_by_cat(
+  data        = train_sf,
+  numeric_vars = c("precio_catastro_prom.y"),
+  group_vars   = c("CODIGO_UPZ", "property_type", "month", "year")
+)
+
+test_sf <- test_sf |>
+  left_join(
+    catastro_long,
+    by = c("LocNombre", "property_type")
+  )
+
+test_sf <- impute_numeric_by_cat(
+  data        = test_sf,
+  numeric_vars = c("precio_catastro_prom.y"),
+  group_vars   = c("CODIGO_UPZ", "property_type", "month", "year")
+)
 
 train <- impute_categorical_by_cat(
   data      = train,
@@ -686,6 +721,9 @@ test <- impute_categorical_by_cat(
   cat_vars  = c("CODIGO_UPZ"),
   group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
 )
+
+# ----------------
+
 
 OLS2<-train(log(price) ~ 
              CODIGO_UPZ +
@@ -726,3 +764,74 @@ predictSample <- test %>%
   ) %>%
   select(property_id, price)
 # NO LO SUBIMOS
+
+# Model 3 OLS*****************
+
+OLS3<-train(log(price) ~ 
+              precio_catastro_prom.y+
+              ESTRATO + ESTRATO:tiene_terraza + tiene_terraza +
+              property_type +
+              garaje_indep_text +
+              garaje_cubierto_text +
+              terraza_propia +
+              sala_comedor_conjunto +
+              tiene_sala +
+              cocina_integral +
+              n_lamparas_200m +
+              menciona_cercania_txt +
+              tiene_balcon +
+              tiene_patio_ropas +
+              cocina_abierta +
+              menciona_cuadras_txt +
+              poly(n_cafes_500m,2,raw=TRUE) +
+              tiene_vigilancia_text +
+              cercania_bus_text +
+              is_residential +
+              remodelada_text +
+              distancia_bus +
+              n_palabras_title +,
+            data=train_sf,
+            method = 'lm', 
+            trControl = fitControl,
+            metric = "MAE"
+)
+
+OLS3
+
+
+# RANDOM FOREST **************************
+
+RF_1000 <- train(
+  log(price) ~ ESTRATO:property_type + property_type + ESTRATO:tiene_terraza + tiene_terraza +
+    property_type +
+    garaje_indep_text +
+    garaje_cubierto_text +
+    terraza_propia +
+    sala_comedor_conjunto +
+    tiene_sala +
+    cocina_integral +
+    n_lamparas_200m +
+    menciona_cercania_txt +
+    tiene_balcon +
+    tiene_patio_ropas +
+    cocina_abierta +
+    menciona_cuadras_txt +
+    poly(n_cafes_500m, 2, raw=TRUE) +
+    tiene_vigilancia_text +
+    cercania_bus_text +
+    is_residential +
+    remodelada_text +
+    distancia_bus +
+    n_palabras_title,
+  data = train,  # Dataset de entrenamiento
+  method = "ranger",  # Usamos el motor ranger para Random Forests
+  trControl = fitControl,  # Especificamos los controles de validación cruzada definidos antes
+  tuneGrid = expand.grid(   # Definimos la grilla de hiperparámetros a explorar
+    mtry = c(3,5,7),  # Número de predictores seleccionados al azar en cada división
+    splitrule = "variance",  # Regla de partición basada en la reducción de varianza (regresión)
+    min.node.size = c(30, 50)# Tamaño mínimo de nodos terminales
+  ),
+  metric = "MAE",
+  num.trees = 1000
+)
+
