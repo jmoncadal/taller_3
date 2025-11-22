@@ -12,12 +12,12 @@ p_load(rio, writexl, readxl, tidyverse, caret, keras,
 
 # Establishing paths ------------------------------------------------------
 
-wd_main <- "C:/Users/marce/Documents/Andes/taller 3/taller_3"
+wd_main <- "C:/Users/Usuario/Documents/Andes/taller 3/taller_3"
 wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
 
-correr <- 1
+correr <- 0
 
 # Importing data ----------------------------------------------------------
 if (correr == 1){
@@ -608,6 +608,13 @@ train_sf <- st_join(
   left = TRUE
 )
 
+test_sf <- st_join(
+  test,
+  localidades %>% select(LocCodigo, LocNombre),
+  left = TRUE
+)
+
+
 set.seed(123)
 
 location_folds  <- spatial_leave_location_out_cv(
@@ -706,7 +713,7 @@ test_sf <- test_sf |>
 
 test_sf <- impute_numeric_by_cat(
   data        = test_sf,
-  numeric_vars = c("precio_catastro_prom.y"),
+  numeric_vars = c("precio_catastro_prom"),
   group_vars   = c("CODIGO_UPZ", "property_type", "month", "year")
 )
 
@@ -767,7 +774,7 @@ predictSample <- test %>%
 
 # Model 3 OLS*****************
 
-OLS3<-train(log(price) ~ 
+OLS3<-train(price ~ 
               precio_catastro_prom.y+
               ESTRATO + ESTRATO:tiene_terraza + tiene_terraza +
               property_type +
@@ -789,7 +796,7 @@ OLS3<-train(log(price) ~
               is_residential +
               remodelada_text +
               distancia_bus +
-              n_palabras_title +,
+              n_palabras_title,
             data=train_sf,
             method = 'lm', 
             trControl = fitControl,
