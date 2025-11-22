@@ -507,183 +507,148 @@ library(neuralnet)
 
 ### 1. Variables para la NN ----------------------------------
 
+library(keras)
+library(dplyr)
+
+### 1. VARIABLES ---------------------------------------------
+
+library(keras)
+library(dplyr)
+
+### 1. VARIABLES ---------------------------------------------
+
+# nn_vars <- c("n_palabras_title", "n_cafes_500m", "distancia_bus")
+
+
 nn_vars <- c(
-
+  "ESTRATO",
   "n_palabras_title",
-  "n_cafes_500m",
-  "distancia_bus"   # UPZ como numérica, missing -> 0
+  "n_lamparas_200m",
+  "distancia_bus",
+  "tiene_sala",
+  "tiene_patio_ropas",
+  "tiene_vigilancia_text",
+  "cocina_integral",
+  "menciona_cercania_txt",
+  "menciona_cuadras_txt",
+  "is_residential",
+  "remodelada_text",
+  "property_type",
 )
-
-nn_vars <- nn_vars[nn_vars %in% names(train_final)]
-
-### 2. Copias de trabajo y tratamiento de NAs ----------------
 
 train_nn <- train_final
 test_nn  <- test_final
 
-# 2.1 CODIGO_UPZ: missing -> 0
-if ("CODIGO_UPZ" %in% nn_vars) {
-  train_nn$CODIGO_UPZ[is.na(train_nn$CODIGO_UPZ)] <- 0
-  test_nn$CODIGO_UPZ[is.na(test_nn$CODIGO_UPZ)]   <- 0
-}
-
-# Guardamos UPZ de train para CV espacial
-upz_train <- train_nn$CODIGO_UPZ
-
-# 2.2 NAs numéricos -> 0
+# Fill NA numeric with 0
 for (v in nn_vars) {
-  if (is.numeric(train_nn[[v]])) {
-    train_nn[[v]][is.na(train_nn[[v]])] <- 0
-    test_nn[[v]][is.na(test_nn[[v]])]   <- 0
-  }
+  train_nn[[v]][is.na(train_nn[[v]])] <- 0
+  test_nn[[v]][is.na(test_nn[[v]])]   <- 0
 }
 
-# 2.3 NAs textuales -> "missing"
-for (v in nn_vars) {
-  if (is.character(train_nn[[v]])) {
-    train_nn[[v]][is.na(train_nn[[v]])] <- "missing"
-    test_nn[[v]][is.na(test_nn[[v]])]   <- "missing"
-  }
-}
+X_train <- as.matrix(train_nn[, nn_vars])
+y_train <- as.numeric(train_nn$price)
 
-### 3. Construir matriz X (train+test) -----------------------
+X_test  <- as.matrix(test_nn[, nn_vars])
 
-df_all <- bind_rows(
-  train_nn[, nn_vars, drop = FALSE],
-  test_nn[,  nn_vars, drop = FALSE]
-)
+### 2. SPATIAL VALIDATION BY UPZ -----------------------------
 
-# Identificar numéricas vs categóricas
-num_cols <- sapply(df_all, is.numeric)
-df_num   <- df_all[, num_cols, drop = FALSE]
-df_cat   <- df_all[, !num_cols, drop = FALSE]
-
-# Categóricas -> factor -> dummies
-if (ncol(df_cat) > 0) {
-  df_cat[] <- lapply(df_cat, factor)
-  X_cat <- model.matrix(~ . - 1, data = df_cat)
-} else {
-  X_cat <- NULL
-}
-
-X_num <- as.matrix(df_num)
-
-# Unimos numéricas + dummies
-if (!is.null(X_cat)) {
-  X_all <- cbind(X_num, X_cat)
-} else {
-  X_all <- X_num
-}
-
-# NAs residuales -> 0
-X_all[is.na(X_all)] <- 0
-
-n_train <- nrow(train_nn)
-
-X_train_all <- X_all[1:n_train, , drop = FALSE]
-X_test_all  <- X_all[(n_train + 1):nrow(X_all), , drop = FALSE]
-y_train_all <- train_nn$price
-
-### 4. Split espacial train/valid por UPZ --------------------
+upz <- train_final$CODIGO_UPZ
+upz[is.na(upz)] <- 0
 
 set.seed(123)
-
-upz_nonzero <- sort(unique(upz_train[upz_train != 0]))
+upz_nonzero <- sort(unique(upz[upz != 0]))
 n_val_upz   <- max(1, round(0.2 * length(upz_nonzero)))
-val_upz     <- sample(upz_nonzero, size = n_val_upz)
+val_upz     <- sample(upz_nonzero, n_val_upz)
 
-idx_val <- which(upz_train %in% val_upz)
-idx_tr  <- setdiff(seq_len(n_train), idx_val)
+idx_val <- which(upz %in% val_upz)
+idx_tr  <- setdiff(seq_len(nrow(X_train)), idx_val)
 
-X_tr  <- X_train_all[idx_tr, , drop = FALSE]
-X_val <- X_train_all[idx_val, , drop = FALSE]
-y_tr  <- y_train_all[idx_tr]
-y_val <- y_train_all[idx_val]
+X_tr  <- X_train[idx_tr, ]
+y_tr  <- y_train[idx_tr]
 
-### 5. Escalamiento (muy importante en NN) -------------------
+X_val <- X_train[idx_val, ]
+y_val <- y_train[idx_val]
 
-scale_train <- function(X) {
-  mu <- colMeans(X)
-  sd <- apply(X, 2, sd)
-  sd[sd == 0] <- 1
-  Xs <- sweep(sweep(X, 2, mu, "-"), 2, sd, "/")
-  list(X = Xs, mu = mu, sd = sd)
-}
+### 3. SCALE NUMERIC FEATURES (important!) --------------------
 
-scale_apply <- function(X, mu, sd) {
-  sweep(sweep(X, 2, mu, "-"), 2, sd, "/")
-}
+mu <- colMeans(X_tr)
+sd <- apply(X_tr, 2, sd)
+sd[sd == 0] <- 1
 
-sc_tr <- scale_train(X_tr)
+scale_fn <- function(x) sweep(sweep(x, 2, mu, "-"), 2, sd, "/")
 
-X_tr_sc     <- sc_tr$X
-X_val_sc    <- scale_apply(X_val,       sc_tr$mu, sc_tr$sd)
-X_train_sc  <- scale_apply(X_train_all, sc_tr$mu, sc_tr$sd)
-X_test_sc   <- scale_apply(X_test_all,  sc_tr$mu, sc_tr$sd)
+X_tr_sc  <- scale_fn(X_tr)
+X_val_sc <- scale_fn(X_val)
+X_train_sc <- scale_fn(X_train)
+X_test_sc  <- scale_fn(X_test)
 
-### 6. Grid search: número de neuronas (hidden) ---------------
+### 4. GRID SEARCH OVER HIDDEN UNITS ---------------------------
 
-sizes   <- c(3, 5, 7, 10)  # puedes ampliar luego si quieres
-results <- data.frame(size = sizes, MAE_val = NA_real_)
+sizes <- c(2, 4, 6, 8)
+results <- data.frame(size = sizes, MAE = NA_real_)
 
 for (s in sizes) {
-  cat("Entrenando neuralnet con", s, "neuronas (validación por UPZ)...\n")
+  cat("Training model with", s, "neurons...\n")
   
-  train_tr_df <- data.frame(price = y_tr, X_tr_sc)
-  val_df      <- data.frame(X_val_sc)
+  model <- keras_model_sequential() %>%
+    layer_dense(units = s, activation = "relu", input_shape = ncol(X_tr_sc)) %>%
+    layer_dense(units = 1)
   
-  nn_fit <- neuralnet(
-    formula       = price ~ .,
-    data          = train_tr_df,
-    hidden        = s,
-    linear.output = TRUE,
-    stepmax       = 1e+06,
-    lifesign      = "minimal"
+  model %>% compile(
+    optimizer = "adam",
+    loss = "mae"
   )
   
-  pred_val <- as.vector(compute(nn_fit, val_df)$net.result)
+  model %>% fit(
+    X_tr_sc, y_tr,
+    epochs = 5,
+    batch_size = 64,
+    verbose = 0
+  )
+  
+  pred_val <- model %>% predict(X_val_sc)
   mae_val  <- mean(abs(y_val - pred_val))
   
-  results[results$size == s, "MAE_val"] <- mae_val
+  results[results$size == s, "MAE"] <- mae_val
 }
 
 print(results)
 
-best_size <- results$size[which.min(results$MAE_val)]
-cat("Mejor número de neuronas en la capa oculta:", best_size, "\n")
+best_size <- results$size[which.min(results$MAE)]
+cat("Best hidden units:", best_size, "\n")
 
-### 7. Modelo final con TODO el train ------------------------
+### 5. FINAL MODEL ON FULL TRAIN -------------------------------
 
-train_full_df <- data.frame(price = y_train_all, X_train_sc)
+model_final <- keras_model_sequential() %>%
+  layer_dense(units = best_size, activation = "relu", input_shape = ncol(X_train_sc)) %>%
+  layer_dense(units = 1)
 
-set.seed(123)
-nn_final <- neuralnet(
-  formula       = price ~ .,
-  data          = train_full_df,
-  hidden        = best_size,
-  linear.output = TRUE,
-  stepmax       = 1e+06,
-  lifesign      = "minimal"
+model_final %>% compile(
+  optimizer = "adam",
+  loss = "mae"
 )
 
-# MAE in-sample
-pred_train_final <- as.vector(compute(nn_final, data.frame(X_train_sc))$net.result)
-mae_train_final  <- mean(abs(y_train_all - pred_train_final))
-cat("MAE in-sample (modelo NN final):", mae_train_final, "\n")
+model_final %>% fit(
+  X_train_sc, y_train,
+  epochs = 20,
+  batch_size = 64,
+  verbose = 1
+)
 
-### 8. Predicción en test y export ---------------------------
+### 6. MAE IN-SAMPLE -------------------------------------------
 
-pred_test_nn <- as.vector(compute(nn_final, data.frame(X_test_sc))$net.result)
+pred_train <- model_final %>% predict(X_train_sc)
+mae_in_sample <- mean(abs(y_train - pred_train))
+cat("MAE in-sample:", mae_in_sample, "\n")
 
-submission_nn <- data.frame(
+### 7. PREDICT TEST + EXPORT -----------------------------------
+
+pred_test <- model_final %>% predict(X_test_sc)
+
+submission <- data.frame(
   property_id = test_final$property_id,
-  price       = pred_test_nn
+  price       = as.vector(pred_test)
 )
 
-write.csv(
-  submission_nn,
-  "submission_neuralnet_UPZspatial_singlelayer.csv",
-  row.names = FALSE
-)
-
+write.csv(submission, "submission_keras_simpleNN.csv", row.names = FALSE)
 
