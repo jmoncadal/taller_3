@@ -7,12 +7,11 @@ rm(list = ls())
 library(pacman)
 p_load(rio, writexl, readxl, tidyverse, caret, keras,
        reticulate, tidymodels, sf, gt, gtsummary, osmdata,
-       gridExtra, plotly, 
-       skimr, leaflet, lwgeom)
+       gridExtra, plotly, skimr, leaflet, lwgeom, ranger)
 
 # Establishing paths ------------------------------------------------------
 
-wd_main <- "/Users/marianacorrea/Desktop/PEG/Big data/taller_3"
+wd_main <- "C:/Users/Juan/OneDrive - Universidad de los andes/Escritorio/Universidad/Posgrado/1. Primer Semestre/Big Data y Machine Learning/Trabajos/taller_3"
 wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
@@ -463,11 +462,54 @@ train$is_residential <- as.integer(lengths(residential_relation) > 0)
 
 write_xlsx(train, paste0(wd_main, wd_output, "/train_final.xlsx"))
 write_xlsx(test, paste0(wd_main, wd_output, "/test_final.xlsx"))
+
 } else {
-# Models ------------------------------------------------------------------
+
+# Importing clean databases -----------------------------------------------
 
 test <- read_xlsx(paste0(wd_main, wd_output, "/test_final.xlsx"))
 train <- read_xlsx(paste0(wd_main, wd_output, "/train_final.xlsx"))
+
 }
 
+# Imputation surface area -------------------------------------------------
+
+train_toTrain <- train %>% filter(!is.na(surface_total)) %>% select(-c(geometry, surface_covered))
+train_toFill <- train %>% filter(is.na(surface_total))  %>% select(-c(geometry, surface_covered))
+
+cv_folds <- vfold_cv(data = train_toTrain, v = 5)
+recipe_bag <- recipe(formula = surface_total ~ ESTRATO +
+                       CODIGO_UPZ + price + property_type + tiene_sala +
+                       tiene_comedor + sala_comedor_conjunto + tiene_garaje_text +
+                       garaje_cubierto_text + garaje_indep_text + tiene_deposito_bodega +
+                       tiene_terraza + tiene_balcon + terraza_propia + tiene_cocina +
+                       cocina_integral + cocina_abierta + tiene_patio_ropas + remodelada_text +
+                       tiene_vigilancia_text + cercania_bus_text + cercania_cc + cercania_cafe_txt +
+                       rooms + bedrooms + bathrooms + distancia_cafe + n_cafes_500m + distancia_bus,
+                   data = train_toTrain)
+
+base_bag <- rand_forest(mtry = 2, trees = tune(), min_n = tune()) |> 
+  set_engine('ranger', importance = 'permutation') |> 
+  set_mode('regression')
+
+workflow_bag <- workflow() |> 
+  add_recipe(recipe_bag) |> 
+  add_model(base_bag)
+
+grid_values <- grid_regular(trees(), min_n(),
+                            levels = c('trees' = 4, 'min_n' = 4))
+tune_bag <- tune_grid(workflow_bag,
+                      resamples = cv_folds,
+                      grid = grid_values,
+                      metrics = metric_set(rmse))
+
+collect_metrics(tune_bag)
+
+final_bag <- finalize_workflow(workflow_bag, select_best(tune_bag, metric = 'rmse'))
+fit_bag <- fit(final_bag, data = train_toTrain)
+
+augment(fit_bag, new_data = train_toTrain) |> 
+  rmse(truth = surface_total, estimate = .pred)
+
+# Models ------------------------------------------------------------------
 
