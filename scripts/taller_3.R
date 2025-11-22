@@ -317,6 +317,12 @@ dist_min_cafe <- apply(dist_matrix_cafe, 1, min)
 
 train$distancia_cafe <- as.numeric(dist_min_cafe)   # distancia en metros
 
+# test
+test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
+dist_matrix_cafe_test <- st_distance(x = test_sf, y = cafes_sf)
+dist_min_cafe_test <- apply(dist_matrix_cafe_test, 1, min)
+test$distancia_cafe <- as.numeric(dist_min_cafe_test)
+
 # Scatter con la relación entre el precio del inmueble y distancia a cafes
 ggplot(train, aes(x = distancia_cafe, y = price)) +
   geom_point(color = "darkblue", alpha = 0.4) +
@@ -343,6 +349,14 @@ train$n_cafes_500m <- n_cafes_500m
 ggplot(train, aes(x = n_cafes_500m, y = price)) +
   geom_point(color = "darkblue", alpha = 0.4) +
   theme_classic()
+
+# test
+test_sf_m <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326) |>
+  st_transform(3116)
+test_buffer_cafe <- st_buffer(test_sf_m, dist = radio_buffer)
+intersections_cafe_test <- st_intersects(test_buffer_cafe, cafes_sf_m)
+n_cafes_500m_test <- lengths(intersections_cafe_test)
+test$n_cafes_500m <- n_cafes_500m_test
 
 # Distancia a estación de transporte --------------------------------------
 
