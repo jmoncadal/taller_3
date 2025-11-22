@@ -705,6 +705,8 @@ train_sf <- impute_numeric_by_cat(
   group_vars   = c("CODIGO_UPZ", "property_type", "month", "year")
 )
 
+ESTRUCTURA
+
 test_sf <- test_sf |>
   left_join(
     catastro_long,
@@ -717,14 +719,14 @@ test_sf <- impute_numeric_by_cat(
   group_vars   = c("CODIGO_UPZ", "property_type", "month", "year")
 )
 
-train <- impute_categorical_by_cat(
-  data      = train,
+train_sf <- impute_categorical_by_cat(
+  data      = train_sf,
   cat_vars  = c("CODIGO_UPZ"),
   group_vars = c("ESTRATO","CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
 )
 
-test <- impute_categorical_by_cat(
-  data      = test,
+test_sf <- impute_categorical_by_cat(
+  data      = test_sf,
   cat_vars  = c("CODIGO_UPZ"),
   group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
 )
@@ -774,29 +776,337 @@ predictSample <- test %>%
 
 # Model 3 OLS*****************
 
+# 
+
+p_load(leaps)
+
+model_form <- log(price) ~ month + year+
+  property_type  +
+  lat + lon + ESTRATO +  + CODIGO_UPZ +
+  EPE__m2_ha + ESTRUCTURA +
+  n_palabras_desc + n_palabras_title + n_palabras_title_nocod +
+  tipo_inmueble_text + tiene_sala + tiene_comedor + sala_comedor_conjunto +
+  n_habitaciones_text  + tiene_garaje_text  +
+  garaje_cubierto_text + garaje_indep_text + tiene_deposito_bodega +
+  tiene_terraza + tiene_balcon + terraza_propia + tiene_cocina +
+  cocina_integral + cocina_abierta + tiene_patio_ropas + remodelada_text +
+  tiene_vigilancia_text + menciona_centro_comercial + uso_comercial_text +
+  menciona_cercania_txt + cercania_bus_text + cercania_cc + cercania_cafe_txt +
+  menciona_cuadras_txt + bedrooms_final_set2 +
+  bathrooms_final_set2 + tipo_inmueble_text_std + property_type_final +
+  ESTRATO_was_na + rooms.y_was_na + bedrooms_final_set2_was_na +
+  bathrooms_final_set2_was_na + distancia_cafe + n_cafes_500m +
+  distancia_bus + n_lamparas_200m + is_residential  +
+  precio_catastro_prom.y + precio_catastro_prom.y_was_na
+# Función auxiliar para predecir con objetos regsubsets
+predict.regsubsets <- function(object, newdata, id, formula_used, ...) {
+  # Identificar filas completas (sin NAs) en newdata
+  model_vars <- all.vars(formula_used)[-1]  # Excluir variable respuesta
+  complete_cases <- complete.cases(newdata[, model_vars, drop = FALSE])
+  
+  # Si no hay casos completos, devolver vector de NAs
+  if (sum(complete_cases) == 0) {
+    return(rep(NA, nrow(newdata)))
+  }
+  
+  # Crear matriz solo con casos completos
+  newdata_complete <- newdata[complete_cases, , drop = FALSE]
+  mat <- model.matrix(formula_used, newdata_complete)
+  
+  # Obtener coeficientes
+  coefi <- coef(object, id = id)
+  xvars <- names(coefi)
+  
+  # Verificar que todas las variables estén en la matriz
+  if (!all(xvars %in% colnames(mat))) {
+    missing <- xvars[!xvars %in% colnames(mat)]
+    stop("Variables faltantes en newdata: ", paste(missing, collapse = ", "))
+  }
+  
+  # Hacer predicción para casos completos
+  pred_complete <- as.vector(mat[, xvars, drop = FALSE] %*% coefi)
+  
+  # Crear vector completo con NAs donde corresponde
+  pred_full <- rep(NA, nrow(newdata))
+  pred_full[complete_cases] <- pred_complete
+  
+  return(pred_full)
+}
+
+# Parámetros de validación cruzada
+k <- 5 
+n <- nrow(train_sf) 
+folds <- sample(rep(1:k, length = n)) 
+cv.errors <- matrix(NA, nrow = k, ncol = 100, 
+                    dimnames = list(NULL, paste(1:100))) 
+
+# Convertir sf a data.frame
+train_df <- st_drop_geometry(train_sf)
+
+train_df <- train_df %>%
+  mutate(bedrooms_final_set2 = as.numeric(bedrooms_final_set2))
+
+train_df <- train_df %>%
+  mutate(bathrooms_final_set2 = as.numeric(bathrooms_final_set2))
+
+train_df <- train_df %>%
+  mutate(CODIGO_UPZ = as.numeric(CODIGO_UPZ))
+
+# Extraer nombre de variable respuesta y predictores
+resp <- all.vars(model_form)[1]
+preds <- attr(terms(model_form), "term.labels")
+
+# Validación cruzada
+for (j in 1:k) {
+  cat("Procesando fold", j, "de", k, "\n")
+  
+  # Dividir datos
+  data_train <- train_df[folds != j, ]
+  data_test  <- train_df[folds == j, ]
+  
+  # Eliminar niveles no usados
+  data_train <- droplevels(data_train)
+  data_test  <- droplevels(data_test)
+  
+  # Validar predictores en AMBOS conjuntos
+  valid_pred <- sapply(preds, function(v) {
+    x_train <- data_train[[v]]
+    x_test <- data_test[[v]]
+    
+    # Remover NAs
+    x_train_no_na <- x_train[!is.na(x_train)]
+    x_test_no_na <- x_test[!is.na(x_test)]
+    
+    # Verificar que haya datos
+    if (length(x_train_no_na) == 0) return(FALSE)
+    
+    if (is.factor(x_train)) {
+      # Para factores: verificar niveles en train y test
+      train_levels <- levels(droplevels(x_train_no_na))
+      test_levels <- unique(as.character(x_test_no_na))
+      
+      # Debe tener al menos 2 niveles en train
+      # Y los niveles de test deben estar en train
+      if (length(train_levels) < 2) return(FALSE)
+      if (!all(test_levels %in% train_levels)) return(FALSE)
+      
+      return(TRUE)
+    } else {
+      # Para numéricos: al menos 2 valores únicos
+      length(unique(x_train_no_na)) > 1
+    }
+  })
+  
+  preds_j <- preds[valid_pred]
+  
+  # Si no hay predictores válidos, saltar este fold
+  if (length(preds_j) == 0) {
+    cat("  Advertencia: No hay predictores válidos en fold", j, "\n")
+    next
+  }
+  
+  # Fórmula para este fold
+  form_j <- as.formula(
+    paste(resp, "~", paste(preds_j, collapse = " + "))
+  )
+  
+  # Seleccionar columnas necesarias
+  data_train <- data_train[, c(resp, preds_j), drop = FALSE]
+  data_test  <- data_test[,  c(resp, preds_j), drop = FALSE]
+  
+  # Asegurar que factores en test tengan los mismos niveles que en train
+  for (var in preds_j) {
+    if (is.factor(data_train[[var]])) {
+      train_levels <- levels(data_train[[var]])
+      data_test[[var]] <- factor(data_test[[var]], levels = train_levels)
+    }
+  }
+  
+  # Ajustar modelo con selección backward
+  best_fit <- regsubsets(
+    form_j,
+    data   = data_train,
+    nvmax  = min(100, length(preds_j)),
+    method = "backward"
+  )
+  
+  # Guardar la fórmula para usar en predicción
+  formula_j <- form_j
+  
+  # Calcular errores para cada tamaño de modelo
+  num_models <- min(100, length(preds_j))
+  
+  for (i in 1:num_models) {
+    tryCatch({
+      pred <- predict.regsubsets(best_fit, newdata = data_test, id = i, 
+                                 formula_used = formula_j)
+      
+      # Obtener valores observados
+      obs <- data_test[[resp]]
+      
+      # Asegurar que pred y obs tengan la misma longitud
+      if (length(pred) != length(obs)) {
+        # Ajustar pred a la longitud de obs si es necesario
+        if (length(pred) < length(obs)) {
+          pred <- c(pred, rep(NA, length(obs) - length(pred)))
+        } else {
+          pred <- pred[1:length(obs)]
+        }
+      }
+      
+      # Calcular MSE solo para observaciones válidas (sin NA)
+      valid_idx <- !is.na(pred) & !is.na(obs)
+      
+      if (sum(valid_idx) > 0) {
+        cv.errors[j, i] <- mean((obs[valid_idx] - pred[valid_idx])^2)
+      } else {
+        cv.errors[j, i] <- NA
+      }
+    }, error = function(e) {
+      cat("  Error en modelo", i, "del fold", j, ":", e$message, "\n")
+      cv.errors[j, i] <<- NA
+    })
+  }
+}
+
+# Calcular error promedio por número de variables
+mean.cv.errors <- colMeans(cv.errors, na.rm = TRUE)
+
+# Mostrar resultados
+cat("\nErrores de validación cruzada (MSE promedio):\n")
+print(round(mean.cv.errors, 2))
+
+# Encontrar mejor número de variables
+best_nvars <- which.min(mean.cv.errors)
+cat("\n=============================================\n")
+cat("Mejor número de variables:", best_nvars, "\n")
+cat("MSE mínimo:", round(mean.cv.errors[best_nvars], 2), "\n")
+cat("=============================================\n")
+
+# Ajustar modelo final con todas las observaciones para ver variables seleccionadas
+cat("\nAjustando modelo final con todos los datos...\n")
+train_df_complete <- train_df[complete.cases(train_df[, c(resp, preds)]), ]
+train_df_complete <- droplevels(train_df_complete)
+
+# Validar predictores en el conjunto completo
+valid_pred_final <- sapply(preds, function(v) {
+  x <- train_df_complete[[v]]
+  x_no_na <- x[!is.na(x)]
+  
+  if (length(x_no_na) == 0) return(FALSE)
+  
+  if (is.factor(x)) {
+    nlevels(droplevels(x_no_na)) > 1
+  } else {
+    length(unique(x_no_na)) > 1
+  }
+})
+
+preds_final <- preds[valid_pred_final]
+form_final <- as.formula(paste(resp, "~", paste(preds_final, collapse = " + ")))
+
+final_fit <- regsubsets(
+  form_final,
+  data = train_df_complete,
+  nvmax = min(100, length(preds_final)),
+  method = "backward"
+)
+
+# Mostrar variables seleccionadas para el mejor modelo
+cat("\n*** VARIABLES SELECCIONADAS (", best_nvars, " variables) ***\n", sep = "")
+selected_vars <- names(coef(final_fit, id = best_nvars))[-1]  # Excluir intercepto
+cat(paste("  -", selected_vars, collapse = "\n"), "\n")
+
+# Mostrar resumen de selección para diferentes tamaños de modelo
+cat("\n*** RESUMEN DE SELECCIÓN POR TAMAÑO ***\n")
+cat("(Las primeras 10 mejores configuraciones)\n\n")
+
+for (i in 1:min(10, length(mean.cv.errors))) {
+  vars_i <- names(coef(final_fit, id = i))[-1]
+  cat("Modelo con", i, "variable(s) - MSE:", round(mean.cv.errors[i], 2), "\n")
+  cat("  Variables:", paste(vars_i, collapse = ", "), "\n\n")
+}
+
+# Graficar resultados
+plot(mean.cv.errors, type = "b", pch = 19,
+     xlab = "Número de variables",
+     ylab = "MSE de validación cruzada",
+     main = "Error de validación cruzada vs Número de variables",
+     col = "steelblue", lwd = 2)
+points(best_nvars, mean.cv.errors[best_nvars], 
+       col = "red", pch = 19, cex = 2)
+text(best_nvars, mean.cv.errors[best_nvars], 
+     labels = paste("Óptimo:", best_nvars, "vars"), 
+     pos = 3, col = "red", font = 2)
+grid()
+
+# Crear objeto con resultados para fácil acceso
+results <- list(
+  cv_errors = cv.errors,
+  mean_cv_errors = mean.cv.errors,
+  best_nvars = best_nvars,
+  best_mse = mean.cv.errors[best_nvars],
+  selected_variables = selected_vars,
+  final_model = final_fit
+)
+
+cat("\n*** Los resultados están guardados en el objeto 'results' ***\n")
+cat("Accede a las variables seleccionadas con: results$selected_variables\n")
+
+return(invisible(results))
+
+
 OLS3<-train(price ~ 
-              precio_catastro_prom.y+
-              ESTRATO + ESTRATO:tiene_terraza + tiene_terraza +
-              property_type +
-              garaje_indep_text +
-              garaje_cubierto_text +
-              terraza_propia +
-              sala_comedor_conjunto +
+              log(price) ~ 
+              month +
+              year+
+              property_typeCasa +
+              lat + lon +
+              ESTRATO+
+              CODIGO_UPZ +
+              EPE__m2_ha + 
+              ESTRUCTURA +
+              n_palabras_desc +
+              n_palabras_title +
+              n_palabras_title_nocod +
+              tipo_inmueble_texthouse +
               tiene_sala +
-              cocina_integral +
-              n_lamparas_200m +
-              menciona_cercania_txt +
+              tiene_comedor +
+              sala_comedor_conjunto +
+              n_habitaciones_text +
+              tiene_garaje_text +
+              garaje_cubierto_text +
+              garaje_indep_text +
+              tiene_deposito_bodega +
+              tiene_terraza +
               tiene_balcon +
-              tiene_patio_ropas +
+              terraza_propia +
+              tiene_cocina +
+              cocina_integral +
               cocina_abierta +
-              menciona_cuadras_txt +
-              poly(n_cafes_500m,2,raw=TRUE) +
-              tiene_vigilancia_text +
-              cercania_bus_text +
-              is_residential +
+              tiene_patio_ropas +
               remodelada_text +
+              tiene_vigilancia_text +
+              menciona_centro_comercial +
+              uso_comercial_text +
+              menciona_cercania_txt +
+              cercania_bus_text +
+              cercania_cafe_txt +
+              menciona_cuadras_txt +
+              bedrooms_final_set2 +
+              bathrooms_final_set2 +
+              ESTRATO_was_na +
+              rooms.y_was_na +
+              bathrooms_final_set2_was_na +
+              distancia_cafe +
+              n_cafes_500m +
               distancia_bus +
-              n_palabras_title,
+              n_lamparas_200m +
+              is_residential +
+              precio_catastro_prom.y +
+              precio_catastro_prom.y_was_na +
+              cercania_cc  +
+              property_type_final,
             data=train_sf,
             method = 'lm', 
             trControl = fitControl,
