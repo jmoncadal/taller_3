@@ -318,8 +318,8 @@ dist_min_cafe <- apply(dist_matrix_cafe, 1, min)
 train$distancia_cafe <- as.numeric(dist_min_cafe)   # distancia en metros
 
 # test
-test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
-dist_matrix_cafe_test <- st_distance(x = test_sf, y = cafes_sf)
+test <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
+dist_matrix_cafe_test <- st_distance(x = test, y = cafes_sf)
 dist_min_cafe_test <- apply(dist_matrix_cafe_test, 1, min)
 test$distancia_cafe <- as.numeric(dist_min_cafe_test)
 
@@ -385,6 +385,11 @@ dist_min_bus <- apply(dist_matrix_bus, 1, min)
 
 train$distancia_bus <- as.numeric(dist_min_bus)
 
+#test
+dist_matrix_bus_test <- st_distance(x = test, y = bus_sf)
+dist_min_bus_test <- apply(dist_matrix_bus_test, 1, min)
+test$distancia_bus <- as.numeric(dist_min_bus_test)
+
 # Distancia a parque más cercano ------------------------------------------
 
 #parques <- opq(bbox = getbb("Bogota Colombia")) |>
@@ -444,6 +449,14 @@ n_lamparas_200m <- lengths(intersections_lamps)
 
 train$n_lamparas_200m <- n_lamparas_200m
 
+#test
+test_sf_m <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326) |>
+  st_transform(3116)
+test_buffer_ilum <- st_buffer(test_sf_m, dist = radio_buffer)
+intersections_lamps_test <- st_intersects(test_buffer_ilum, lamparas_sf_m)
+n_lamparas_200m_test <- lengths(intersections_lamps_test)
+test$n_lamparas_200m <- n_lamparas_200m_test
+
 # Zona residencial --------------------------------------------------------
 
 residential <- opq(bbox = getbb("Bogota Colombia")) |>
@@ -459,15 +472,21 @@ residential_relation <- st_within(train, residential_polygons)
 # 1 si el inumeble está en zona residencial, 0 si no
 train$is_residential <- as.integer(lengths(residential_relation) > 0)
 
+#test
+test_sf <- st_as_sf(test, coords = c("lon", "lat"), crs = 4326)
+residential_relation_test <- st_within(test_sf, residential_polygons)
+test$is_residential <- as.integer(lengths(residential_relation_test) > 0)
+
+
 # Exporting models --------------------------------------------------------
 
-write_xlsx(train, paste0(wd_main, wd_output, "/train_final.xlsx"))
-write_xlsx(test, paste0(wd_main, wd_output, "/test_final.xlsx"))
+write_xlsx(train, paste0(wd_main, wd_data, "/train_final.xlsx"))
+write_xlsx(test, paste0(wd_main, wd_data, "/test_final.xlsx"))
 } else {
 # Models ------------------------------------------------------------------
 
-test <- read_xlsx(paste0(wd_main, wd_output, "/test_final.xlsx"))
-train <- read_xlsx(paste0(wd_main, wd_output, "/train_final.xlsx"))
+test <- read_xlsx(paste0(wd_main, wd_data, "/test_final.xlsx"))
+train <- read_xlsx(paste0(wd_main, wd_data, "/train_final.xlsx"))
 }
 
 
