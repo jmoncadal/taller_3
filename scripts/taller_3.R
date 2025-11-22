@@ -17,7 +17,7 @@ wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
 
-correr <- 1
+correr <- 0
 
 # Importing data ----------------------------------------------------------
 if (correr == 1){
@@ -593,6 +593,12 @@ p_load("spatialsample")
 
 p_load("caret")
 
+train <- train %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+
+test <- test %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+
 localidades <- st_read(paste0(wd_main, wd_data, "/localidades.geojson"))
 localidades <- st_transform(localidades, 4326)
 
@@ -618,3 +624,105 @@ for(i in 1:nrow(location_folds)){
 
 fitControl<-trainControl(method ="cv",
                          index=folds)
+
+# Model
+
+# OLS
+
+OLS<-train(log(price) ~ 
+             ESTRATO +
+             tiene_terraza +
+             property_type +
+             garaje_indep_text +
+             garaje_cubierto_text +
+             terraza_propia +
+             sala_comedor_conjunto +
+             tiene_sala +
+             cocina_integral +
+             n_lamparas_200m +
+             menciona_cercania_txt +
+             tiene_balcon +
+             tiene_patio_ropas +
+             cocina_abierta +
+             menciona_cuadras_txt +
+             n_cafes_500m +
+             tiene_vigilancia_text +
+             cercania_bus_text +
+             is_residential +
+             remodelada_text +
+             distancia_bus +
+             n_palabras_title,
+           data=train,
+           method = 'lm', 
+           trControl = fitControl,
+           metric = "MAE"
+)
+
+OLS
+
+predictSample <- test %>%
+  mutate(
+    pred_log_price  = predict(OLS, newdata = test),   # predicción en log
+    price      = exp(pred_log_price)             # volver al nivel
+  ) %>%
+  select(property_id, price)
+
+predictSample <- predictSample %>% 
+  st_drop_geometry()
+
+# Subido
+write.csv(predictSample,paste0(wd_main, wd_output,"/estimacion_ols_inicial.csv"), row.names = FALSE)
+
+# Model 2 OLS
+
+train <- impute_categorical_by_cat(
+  data      = train,
+  cat_vars  = c("CODIGO_UPZ"),
+  group_vars = c("ESTRATO","CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+)
+
+test <- impute_categorical_by_cat(
+  data      = test,
+  cat_vars  = c("CODIGO_UPZ"),
+  group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+)
+
+OLS2<-train(log(price) ~ 
+             CODIGO_UPZ +
+             ESTRATO +
+             tiene_terraza +
+             property_type +
+             garaje_indep_text +
+             garaje_cubierto_text +
+             terraza_propia +
+             sala_comedor_conjunto +
+             tiene_sala +
+             cocina_integral +
+             n_lamparas_200m +
+             menciona_cercania_txt +
+             tiene_balcon +
+             tiene_patio_ropas +
+             cocina_abierta +
+             menciona_cuadras_txt +
+             n_cafes_500m +
+             tiene_vigilancia_text +
+             cercania_bus_text +
+             is_residential +
+             remodelada_text +
+             distancia_bus +
+             n_palabras_title,
+           data=train,
+           method = 'lm', 
+           trControl = fitControl,
+           metric = "MAE"
+)
+
+OLS2
+
+predictSample <- test %>%
+  mutate(
+    pred_log_price  = predict(OLS, newdata = test),   # predicción en log
+    price      = exp(pred_log_price)             # volver al nivel
+  ) %>%
+  select(property_id, price)
+# NO LO SUBIMOS
