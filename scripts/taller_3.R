@@ -12,13 +12,15 @@ p_load(rio, writexl, readxl, tidyverse, caret, keras,
 
 # Establishing paths ------------------------------------------------------
 
-wd_main <- "C:/Users/Juan/OneDrive - Universidad de los andes/Escritorio/Universidad/Posgrado/1. Primer Semestre/Big Data y Machine Learning/Trabajos/taller_3"
+wd_main <- "/Users/marianacorrea/Desktop/PEG/Big data/taller_3"
 wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
 
-# Importing data ----------------------------------------------------------
+correr <- 0
 
+# Importing data ----------------------------------------------------------
+if (correr == 1){
 test <- read.csv(paste0(wd_main, wd_data, "/test.csv"))
 train <- read.csv(paste0(wd_main, wd_data, "/train.csv"))
 
@@ -443,6 +445,15 @@ residential_relation <- st_within(train, residential_polygons)
 # 1 si el inumeble está en zona residencial, 0 si no
 train$is_residential <- as.integer(lengths(residential_relation) > 0)
 
+# Exporting models --------------------------------------------------------
+
+write_xlsx(train, paste0(wd_main, wd_output, "/train_final.xlsx"))
+write_xlsx(test, paste0(wd_main, wd_output, "/test_final.xlsx"))
+} else {
 # Models ------------------------------------------------------------------
+
+test <- read_xlsx(paste0(wd_main, wd_output, "/test_final.xlsx"))
+train <- read_xlsx(paste0(wd_main, wd_output, "/train_final.xlsx"))
+}
 
 
