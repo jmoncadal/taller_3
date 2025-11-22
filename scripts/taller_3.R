@@ -17,6 +17,125 @@ wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
 
+# Función de imputación
+# Moda sencilla (para character o factor)
+get_mode <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x) == 0) return(NA)
+  
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+impute_numeric_by_cat <- function(data, numeric_vars, group_vars) {
+  data <- as.data.frame(data)
+  
+  # Validaciones básicas
+  missing_g <- setdiff(group_vars, names(data))
+  if (length(missing_g) > 0) {
+    stop("Estas variables de agrupación no existen en el data: ",
+         paste(missing_g, collapse = ", "))
+  }
+  
+  missing_n <- setdiff(numeric_vars, names(data))
+  if (length(missing_n) > 0) {
+    stop("Estas variables numéricas no existen en el data: ",
+         paste(missing_n, collapse = ", "))
+  }
+  
+  # Clave de grupo a partir de las variables categóricas
+  key <- interaction(data[group_vars], drop = TRUE, lex.order = TRUE)
+  
+  for (v in numeric_vars) {
+    if (!is.numeric(data[[v]])) {
+      warning("La variable ", v, " no es numérica (clase: ",
+              paste(class(data[[v]]), collapse = ", "),
+              "). Se intenta igual, pero revísalo.")
+    }
+    
+    # Indicador de NA original
+    flag_name <- paste0(v, "_was_na")
+    data[[flag_name]] <- as.integer(is.na(data[[v]]))
+    
+    # Promedio global
+    global_mean <- mean(data[[v]], na.rm = TRUE)
+    
+    # Promedio por grupo
+    group_means <- tapply(data[[v]], key, function(z) mean(z, na.rm = TRUE))
+    gm_vec <- group_means[as.character(key)]  # alineado por fila
+    
+    x <- data[[v]]
+    na_idx <- is.na(x)
+    
+    # Candidato: primero media de su grupo, si es NA -> media global
+    candidate <- gm_vec
+    candidate[is.na(candidate)] <- global_mean
+    
+    x[na_idx] <- candidate[na_idx]
+    data[[v]] <- x
+  }
+  
+  return(data)
+}
+
+impute_categorical_by_cat <- function(data, cat_vars, group_vars) {
+  data <- as.data.frame(data)
+  
+  # Validaciones
+  missing_g <- setdiff(group_vars, names(data))
+  if (length(missing_g) > 0) {
+    stop("Estas variables de agrupación no existen en el data: ",
+         paste(missing_g, collapse = ", "))
+  }
+  
+  missing_c <- setdiff(cat_vars, names(data))
+  if (length(missing_c) > 0) {
+    stop("Estas variables categóricas no existen en el data: ",
+         paste(missing_c, collapse = ", "))
+  }
+  
+  # Clave de grupo
+  key <- interaction(data[group_vars], drop = TRUE, lex.order = TRUE)
+  
+  for (v in cat_vars) {
+    # Indicador de NA original
+    flag_name <- paste0(v, "_was_na")
+    data[[flag_name]] <- as.integer(is.na(data[[v]]))
+    
+    x <- data[[v]]
+    is_fac <- is.factor(x)
+    
+    # Trabajamos en character para no enredarnos con los niveles del factor
+    x_chr <- as.character(x)
+    
+    # Moda global
+    global_mode <- get_mode(x_chr)
+    if (is.na(global_mode)) {
+      warning("La variable ", v, " tiene solo NA; no se pudo calcular moda global.")
+    }
+    
+    # Moda por grupo
+    group_modes <- tapply(x_chr, key, get_mode)
+    gm_vec <- group_modes[as.character(key)]
+    
+    na_idx <- is.na(x_chr)
+    
+    candidate <- gm_vec
+    candidate[is.na(candidate)] <- global_mode
+    
+    x_chr[na_idx] <- candidate[na_idx]
+    
+    # Volvemos a la clase original
+    if (is_fac) {
+      data[[v]] <- factor(x_chr)
+    } else {
+      data[[v]] <- x_chr
+    }
+  }
+  
+  return(data)
+}
+
 correr <- 0
 
 # Importing data ----------------------------------------------------------
@@ -701,11 +820,9 @@ train_sf <- train_sf |>
 
 train_sf <- impute_numeric_by_cat(
   data        = train_sf,
-  numeric_vars = c("precio_catastro_prom.y"),
+  numeric_vars = c("precio_catastro_prom"),
   group_vars   = c("CODIGO_UPZ", "property_type", "month", "year")
 )
-
-ESTRUCTURA
 
 test_sf <- test_sf |>
   left_join(
@@ -730,6 +847,31 @@ test_sf <- impute_categorical_by_cat(
   cat_vars  = c("CODIGO_UPZ"),
   group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
 )
+
+train_sf <- impute_categorical_by_cat(
+  data      = train_sf,
+  cat_vars  = c("EPE__m2_ha"),
+  group_vars = c("ESTRATO","CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+)
+
+test_sf <- impute_categorical_by_cat(
+  data      = test_sf,
+  cat_vars  = c("EPE__m2_ha"),
+  group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+)
+
+train_sf <- impute_categorical_by_cat(
+  data      = train_sf,
+  cat_vars  = c("ESTRUCTURA"),
+  group_vars = c("ESTRATO","CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+)
+
+test_sf <- impute_categorical_by_cat(
+  data      = test_sf,
+  cat_vars  = c("ESTRUCTURA"),
+  group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+)
+
 
 # ----------------
 
@@ -758,7 +900,7 @@ OLS2<-train(log(price) ~
              remodelada_text +
              distancia_bus +
              n_palabras_title,
-           data=train,
+           data=train_sf,
            method = 'lm', 
            trControl = fitControl,
            metric = "MAE"
@@ -797,7 +939,7 @@ model_form <- log(price) ~ month + year+
   ESTRATO_was_na + rooms.y_was_na + bedrooms_final_set2_was_na +
   bathrooms_final_set2_was_na + distancia_cafe + n_cafes_500m +
   distancia_bus + n_lamparas_200m + is_residential  +
-  precio_catastro_prom.y + precio_catastro_prom.y_was_na
+  precio_catastro_prom + precio_catastro_prom_was_na + CODIGO_UPZ_was_na
 # Función auxiliar para predecir con objetos regsubsets
 predict.regsubsets <- function(object, newdata, id, formula_used, ...) {
   # Identificar filas completas (sin NAs) en newdata
@@ -1056,34 +1198,20 @@ cat("Accede a las variables seleccionadas con: results$selected_variables\n")
 return(invisible(results))
 
 
-OLS3<-train(price ~ 
-              log(price) ~ 
-              month +
-              year+
-              property_typeCasa +
-              lat + lon +
+OLS3<-train(log(price) ~ 
+              # month +
+              # year+
+              property_type +
               ESTRATO+
-              CODIGO_UPZ +
+              # CODIGO_UPZ +
               EPE__m2_ha + 
               ESTRUCTURA +
-              n_palabras_desc +
-              n_palabras_title +
               n_palabras_title_nocod +
-              tipo_inmueble_texthouse +
-              tiene_sala +
               tiene_comedor +
               sala_comedor_conjunto +
-              n_habitaciones_text +
               tiene_garaje_text +
-              garaje_cubierto_text +
-              garaje_indep_text +
               tiene_deposito_bodega +
               tiene_terraza +
-              tiene_balcon +
-              terraza_propia +
-              tiene_cocina +
-              cocina_integral +
-              cocina_abierta +
               tiene_patio_ropas +
               remodelada_text +
               tiene_vigilancia_text +
@@ -1103,10 +1231,11 @@ OLS3<-train(price ~
               distancia_bus +
               n_lamparas_200m +
               is_residential +
-              precio_catastro_prom.y +
-              precio_catastro_prom.y_was_na +
-              cercania_cc  +
-              property_type_final,
+              precio_catastro_prom+
+              precio_catastro_prom_was_na +
+              cercania_cc  
+              # property_type_final
+            ,
             data=train_sf,
             method = 'lm', 
             trControl = fitControl,
@@ -1119,36 +1248,131 @@ OLS3
 # RANDOM FOREST **************************
 
 RF_1000 <- train(
-  log(price) ~ ESTRATO:property_type + property_type + ESTRATO:tiene_terraza + tiene_terraza +
+  log(price) ~ 
+    # month +
+    # year+
     property_type +
-    garaje_indep_text +
-    garaje_cubierto_text +
-    terraza_propia +
+    ESTRATO+
+    # CODIGO_UPZ +
+    EPE__m2_ha + 
+    ESTRUCTURA +
+    n_palabras_title_nocod +
+    tiene_comedor +
     sala_comedor_conjunto +
-    tiene_sala +
-    cocina_integral +
-    n_lamparas_200m +
-    menciona_cercania_txt +
-    tiene_balcon +
+    tiene_garaje_text +
+    tiene_deposito_bodega +
+    tiene_terraza +
     tiene_patio_ropas +
-    cocina_abierta +
-    menciona_cuadras_txt +
-    poly(n_cafes_500m, 2, raw=TRUE) +
-    tiene_vigilancia_text +
-    cercania_bus_text +
-    is_residential +
     remodelada_text +
+    tiene_vigilancia_text +
+    menciona_centro_comercial +
+    uso_comercial_text +
+    menciona_cercania_txt +
+    cercania_bus_text +
+    cercania_cafe_txt +
+    menciona_cuadras_txt +
+    bedrooms_final_set2 +
+    bathrooms_final_set2 +
+    ESTRATO_was_na +
+    rooms.y_was_na +
+    bathrooms_final_set2_was_na +
+    distancia_cafe +
+    n_cafes_500m +
     distancia_bus +
-    n_palabras_title,
-  data = train,  # Dataset de entrenamiento
+    n_lamparas_200m +
+    is_residential +
+    precio_catastro_prom+
+    precio_catastro_prom_was_na +
+    cercania_cc  
+  # property_type_final,
+  ,
+  data = train_sf,  # Dataset de entrenamiento
   method = "ranger",  # Usamos el motor ranger para Random Forests
   trControl = fitControl,  # Especificamos los controles de validación cruzada definidos antes
   tuneGrid = expand.grid(   # Definimos la grilla de hiperparámetros a explorar
-    mtry = c(3,5,7),  # Número de predictores seleccionados al azar en cada división
+    mtry = c(4,6,8),  # Número de predictores seleccionados al azar en cada división
     splitrule = "variance",  # Regla de partición basada en la reducción de varianza (regresión)
-    min.node.size = c(30, 50)# Tamaño mínimo de nodos terminales
+    min.node.size = c(30, 50, 70 )# Tamaño mínimo de nodos terminales
   ),
   metric = "MAE",
   num.trees = 1000
 )
 
+RF_1000V2 <- train(
+  log(price) ~ 
+    # efectos principales
+    property_type +
+    ESTRATO +
+    EPE__m2_ha +
+    ESTRUCTURA +
+    n_palabras_title_nocod +
+    tiene_comedor +
+    sala_comedor_conjunto +
+    tiene_garaje_text +
+    tiene_deposito_bodega +
+    tiene_terraza +
+    tiene_patio_ropas +
+    remodelada_text +
+    tiene_vigilancia_text +
+    menciona_centro_comercial +
+    uso_comercial_text +
+    menciona_cercania_txt +
+    cercania_bus_text +
+    cercania_cafe_txt +
+    menciona_cuadras_txt +
+    bedrooms_final_set2 +
+    bathrooms_final_set2 +
+    ESTRATO_was_na +
+    rooms.y_was_na +
+    bathrooms_final_set2_was_na +
+    distancia_cafe +
+    n_cafes_500m +
+    distancia_bus +
+    n_lamparas_200m +
+    is_residential +
+    precio_catastro_prom +
+    precio_catastro_prom_was_na +
+    cercania_cc +
+    
+    # NO LINEALIDADES (polinomios y logs)
+    I(EPE__m2_ha^2) +
+    I(bedrooms_final_set2^2) +
+    I(bathrooms_final_set2^2) +
+    I(log1p(distancia_cafe)) +
+    I(log1p(distancia_bus)) +
+    I(log1p(n_cafes_500m)) +
+    I(log1p(n_lamparas_200m)) +
+    I(precio_catastro_prom^2) +
+    
+    # INTERACCIONES ESTRUCTURALES
+    bedrooms_final_set2:bathrooms_final_set2 +         # tamaño “útil” del hogar
+    property_type:bedrooms_final_set2 +               # más cuartos valen distinto en casa vs apto
+    property_type:bathrooms_final_set2 +
+    property_type:ESTRATO +                           # estrato no pega igual según tipo
+    ESTRATO:precio_catastro_prom +                    # catastro refleja mejor precio en altos estratos
+    property_type:precio_catastro_prom +
+    
+    # INTERACCIONES DE LOCALIZACIÓN / AMENITIES
+    cercania_cafe_txt:distancia_cafe +
+    cercania_bus_text:distancia_bus +
+    menciona_centro_comercial:cercania_cc +
+    is_residential:uso_comercial_text +               # uso mixto en zonas residenciales
+    
+    # INTERACCIONES CON REMODELACIÓN / SEGURIDAD
+    remodelada_text:ESTRATO +
+    remodelada_text:tiene_vigilancia_text +
+    
+    # INTERACCIÓN CON IMPUTACIONES (slopes distintos cuando el dato fue imputado)
+    precio_catastro_prom:precio_catastro_prom_was_na
+  ,
+  data = train_sf,  # Dataset de entrenamiento
+  method = "ranger",  # Usamos el motor ranger para Random Forests
+  trControl = fitControl,  # Especificamos los controles de validación cruzada definidos antes
+  tuneGrid = expand.grid(   # Definimos la grilla de hiperparámetros a explorar
+    mtry = c(4,6,8),  # Número de predictores seleccionados al azar en cada división
+    splitrule = "variance",  # Regla de partición basada en la reducción de varianza (regresión)
+    min.node.size = c(30, 50, 70 )# Tamaño mínimo de nodos terminales
+  ),
+  metric = "MAE",
+  num.trees = 1000
+)
