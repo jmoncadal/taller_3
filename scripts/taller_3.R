@@ -12,12 +12,12 @@ p_load(rio, writexl, readxl, tidyverse, caret, keras,
 
 # Establishing paths ------------------------------------------------------
 
-wd_main <- "/Users/marianacorrea/Desktop/PEG/Big data/taller_3"
+wd_main <- "C:/Users/marce/Documents/Andes/taller_3/taller_3"
 wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
 
-correr <- 0
+correr <- 1
 
 # Importing data ----------------------------------------------------------
 if (correr == 1){
@@ -75,18 +75,18 @@ ggplot(train) +
 # Spatial modeling --------------------------------------------------------
 
 train <- train %>% 
-  st_as_sf(coords = c("lon", "lat"), crs = 4326)
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
 
 test <- test %>% 
-  st_as_sf(coords = c("lon", "lat"), crs = 4326)
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
 
 # Joining with Estrato
 
 estratos <- st_transform(estratos, st_crs(train))
 estratos <- st_make_valid(estratos)
 
-train <- st_join(train, estratos, join = st_intersects, left = FALSE)
-test  <- st_join(test,  estratos, join = st_intersects, left = FALSE)
+train <- st_join(train, estratos, join = st_intersects)
+test  <- st_join(test,  estratos, join = st_intersects)
 
 # Joining with UPZ
 upz <- st_transform(upz, 4326)
@@ -115,25 +115,130 @@ test <- test %>%
 
 # Room imputation
 
-train_rooms <- train %>%
-  st_drop_geometry() %>%                             
-  group_by(month, year, property_type, CODIGO_UPZ) %>% 
-  summarise(
-    rooms_mean     = round(mean(rooms.y,     na.rm = TRUE)),
-    bedrooms_mean  = round(mean(bedrooms.y,  na.rm = TRUE)),
-    bathrooms_mean = round(mean(bathrooms.y, na.rm = TRUE)),
-    .groups = "drop"
-  )
+# Moda sencilla (para character o factor)
+get_mode <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x) == 0) return(NA)
+  
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
 
-train2 <- train %>%
-  left_join(train_rooms,
-            by = c("month", "year", "property_type", "CODIGO_UPZ")) %>%
-  mutate(
-    rooms     = coalesce(rooms.y,     rooms_mean),
-    bedrooms  = coalesce(bedrooms.y,  bedrooms_mean),
-    bathrooms = coalesce(bathrooms.y, bathrooms_mean)
-  ) %>%
-  select(-rooms_mean, -bedrooms_mean, -bathrooms_mean)
+impute_numeric_by_cat <- function(data, numeric_vars, group_vars) {
+  data <- as.data.frame(data)
+  
+  # Validaciones básicas
+  missing_g <- setdiff(group_vars, names(data))
+  if (length(missing_g) > 0) {
+    stop("Estas variables de agrupación no existen en el data: ",
+         paste(missing_g, collapse = ", "))
+  }
+  
+  missing_n <- setdiff(numeric_vars, names(data))
+  if (length(missing_n) > 0) {
+    stop("Estas variables numéricas no existen en el data: ",
+         paste(missing_n, collapse = ", "))
+  }
+  
+  # Clave de grupo a partir de las variables categóricas
+  key <- interaction(data[group_vars], drop = TRUE, lex.order = TRUE)
+  
+  for (v in numeric_vars) {
+    if (!is.numeric(data[[v]])) {
+      warning("La variable ", v, " no es numérica (clase: ",
+              paste(class(data[[v]]), collapse = ", "),
+              "). Se intenta igual, pero revísalo.")
+    }
+    
+    # Indicador de NA original
+    flag_name <- paste0(v, "_was_na")
+    data[[flag_name]] <- as.integer(is.na(data[[v]]))
+    
+    # Promedio global
+    global_mean <- mean(data[[v]], na.rm = TRUE)
+    
+    # Promedio por grupo
+    group_means <- tapply(data[[v]], key, function(z) mean(z, na.rm = TRUE))
+    gm_vec <- group_means[as.character(key)]  # alineado por fila
+    
+    x <- data[[v]]
+    na_idx <- is.na(x)
+    
+    # Candidato: primero media de su grupo, si es NA -> media global
+    candidate <- gm_vec
+    candidate[is.na(candidate)] <- global_mean
+    
+    x[na_idx] <- candidate[na_idx]
+    data[[v]] <- x
+  }
+  
+  return(data)
+}
+
+impute_categorical_by_cat <- function(data, cat_vars, group_vars) {
+  data <- as.data.frame(data)
+  
+  # Validaciones
+  missing_g <- setdiff(group_vars, names(data))
+  if (length(missing_g) > 0) {
+    stop("Estas variables de agrupación no existen en el data: ",
+         paste(missing_g, collapse = ", "))
+  }
+  
+  missing_c <- setdiff(cat_vars, names(data))
+  if (length(missing_c) > 0) {
+    stop("Estas variables categóricas no existen en el data: ",
+         paste(missing_c, collapse = ", "))
+  }
+  
+  # Clave de grupo
+  key <- interaction(data[group_vars], drop = TRUE, lex.order = TRUE)
+  
+  for (v in cat_vars) {
+    # Indicador de NA original
+    flag_name <- paste0(v, "_was_na")
+    data[[flag_name]] <- as.integer(is.na(data[[v]]))
+    
+    x <- data[[v]]
+    is_fac <- is.factor(x)
+    
+    # Trabajamos en character para no enredarnos con los niveles del factor
+    x_chr <- as.character(x)
+    
+    # Moda global
+    global_mode <- get_mode(x_chr)
+    if (is.na(global_mode)) {
+      warning("La variable ", v, " tiene solo NA; no se pudo calcular moda global.")
+    }
+    
+    # Moda por grupo
+    group_modes <- tapply(x_chr, key, get_mode)
+    gm_vec <- group_modes[as.character(key)]
+    
+    na_idx <- is.na(x_chr)
+    
+    candidate <- gm_vec
+    candidate[is.na(candidate)] <- global_mode
+    
+    x_chr[na_idx] <- candidate[na_idx]
+    
+    # Volvemos a la clase original
+    if (is_fac) {
+      data[[v]] <- factor(x_chr)
+    } else {
+      data[[v]] <- x_chr
+    }
+  }
+  
+  return(data)
+}
+
+# 2. Imputar categóricas por moda condicional
+train2 <- impute_categorical_by_cat(
+  data      = train,
+  cat_vars  = c("ESTRATO", "rooms.y", "bedrooms_final_set2", "bathrooms_final_set2"),
+  group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+)
 
 # Evaluación imputación train
 
@@ -149,25 +254,12 @@ missings_train2 <- skim(train2) %>%
 
 # Evaluación imputación test
 
-test_rooms <- test %>%
-  st_drop_geometry() %>%                             
-  group_by(month, year, property_type, CODIGO_UPZ) %>% 
-  summarise(
-    rooms_mean     = round(mean(rooms.y,     na.rm = TRUE)),
-    bedrooms_mean  = round(mean(bedrooms.y,  na.rm = TRUE)),
-    bathrooms_mean = round(mean(bathrooms.y, na.rm = TRUE)),
-    .groups = "drop"
-  )
-
-test2 <- test %>%
-  left_join(test_rooms,
-            by = c("month", "year", "property_type", "CODIGO_UPZ")) %>%
-  mutate(
-    rooms     = coalesce(rooms.y,     rooms_mean),
-    bedrooms  = coalesce(bedrooms.y,  bedrooms_mean),
-    bathrooms = coalesce(bathrooms.y, bathrooms_mean)
-  ) %>%
-  select(-rooms_mean, -bedrooms_mean, -bathrooms_mean)
+# 2. Imputar categóricas por moda condicional
+test2 <- impute_categorical_by_cat(
+  data      = test,
+  cat_vars  = c("ESTRATO", "rooms.y", "bedrooms_final_set2", "bathrooms_final_set2"),
+  group_vars = c("CODIGO_UPZ", "property_type", "month", "year", "tiene_sala","tiene_terraza")
+)
 
 # Evaluación imputación tests
 
@@ -197,8 +289,7 @@ train <- train2 %>%
          surface_total = surface_total.y,
          surface_covered = surface_covered.y,
          OBJECTID = OBJECTID.x,
-         property_type = property_type_final) %>%
-  drop_na(rooms, bedrooms, bathrooms)
+         property_type = property_type_final)
 
 test <- test2 %>%
   select(-c(price.x, surface_total.x, surface_covered.x,
@@ -214,8 +305,15 @@ test <- test2 %>%
          surface_total = surface_total.y,
          surface_covered = surface_covered.y,
          OBJECTID = OBJECTID.x,
-         property_type = property_type_final) %>%
-  drop_na(rooms, bedrooms, bathrooms)
+         property_type = property_type_final)
+
+# Spatial modeling --------------------------------------------------------
+
+train <- train %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+
+test <- test %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
 
 # Variable creation
 
