@@ -201,9 +201,3 @@ Además, para algunos modelos y el notebook de texto puede ser necesario:
   - Incorporación de variables externas (OSM) y textuales.
   - Uso de múltiples familias de algoritmos (lineales, árboles, boosting, redes, superlearner).
   - Generación de múltiples submissions en Kaggle y análisis comparativo de desempeño.
-
-Puedes adaptar este README agregando:
-
-- Nombre del equipo y de los/las integrantes.
-- Puntaje final obtenido en Kaggle.
-- Cualquier comentario adicional sobre limitaciones o posibles extensiones del proyecto.
