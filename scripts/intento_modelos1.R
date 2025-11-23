@@ -1,6 +1,78 @@
-library(readxl)
-library(sf)
+####
+# Proyecto : Taller 3 - Modelos de precio de vivienda (Chapinero)
+# Archivo  : 01_modelos_price.R
+# Autores  : Equipo X
+# Fecha    : 2025-11-23
+# Descripción:
+#   Script maestro que:
+#    - Carga y prepara bases train/test
+#    - Construye validación espacial por localidad/UPZ
+#    - Estima modelos:
+#        * Regresión lineal con selección forward (stepAIC)
+#        * glmnet (CV espacial por UPZ)
+#        * NN v01 (grid de neuronas)
+#        * CART (árboles con tuning de cp)
+#        * Random Forest usando variables del CART
+#        * NN v02 (layers x units + early stopping)
+#        * Super Learner (mean, glm, glmnet, CART, RF, NN)
+####
 
+####
+# ÍNDICE
+# 0. Configuración general
+# 1. Gestión de paquetes
+# 2. Carga de librerías y opciones
+# 3. Rutas de trabajo
+# 4. Carga y preparación de datos (sf, Localidades)
+# 5. Definición de conjuntos de variables
+# 6. Modelo lineal con selección forward (stepAIC)
+# 7. glmnet con CV espacial por Localidad
+# 8. NN v01 (keras, grid tamaño)
+# 9. CART + selección de cp con validación espacial
+# 10. Random Forest sobre variables del CART
+# 11. NN v02 (layers x units + early stopping)
+# 12. Super Learner (mean, glm, glmnet, CART, RF, NN)
+####
+
+####
+# 0. Configuración general
+####
+
+set.seed(123)  # Semilla global (ajústala si quieres)
+options(
+  scipen = 999,                # evitar notación científica fea
+  dplyr.summarise.inform = FALSE
+)
+
+####
+# 1. Gestión de paquetes ====
+####
+
+use_packages <- function(pkgs) {
+  for (p in pkgs) {
+    if (!requireNamespace(p, quietly = TRUE)) {
+      install.packages(p)
+    }
+    library(p, character.only = TRUE)
+  }
+}
+
+####
+# 2. Carga de librerías y opciones ====
+###
+
+use_packages(c(
+  "readxl", "sf", "tidyr", "dplyr",
+  "MASS",          # stepAIC (forward selection)
+  "glmnet",
+  "nnet", "neuralnet", "keras",
+  "rpart", "ranger",
+  "data.table", "sl3", "future"
+))
+
+####
+# 3. Rutas y procesamientos ====
+####
 
 test_final <- read_excel("stores/test_final.xlsx")
 View(test_final)
@@ -14,7 +86,10 @@ wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
 
-# Ponemos la loc ====================================================
+
+####
+# 4. Procesamientos ====
+####
 
 train_final <- train_final %>% 
   st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
@@ -53,6 +128,11 @@ test_final <- test_final %>%
     LocNombre = LocNombre.y
   ) %>%
   select(-LocCodigo.x, -LocNombre.x, -LocCodigo.y, -LocNombre.y)
+
+
+####
+# 5. Definición conjuntos de variables ====
+####
 
 vars_text <- c(
   # texto general / categórico
@@ -109,7 +189,11 @@ x_forward <- unique(c(
 
 x_forward
 
-library(MASS)
+
+
+####
+# 6. Modelo lineal con selección de forward ====
+####
 
 # Modelo nulo: solo intercepto
 modelo_nulo <- lm(price ~ 1, data = df_sel_cc)
@@ -121,7 +205,7 @@ formula_full <- as.formula(
 
 modelo_full <- lm(formula_full, data = train_final)
 
-# Forward selection (AIC)
+# Forward selection 
 modelo_forward <- stepAIC(
   modelo_nulo,
   direction = "forward",
@@ -134,12 +218,11 @@ summary(modelo_forward)
 vars_forward_sel <- attr(terms(modelo_forward), "term.labels")
 vars_forward_sel
 
-### Optimización glmnet
+####
+# 7. glmnet con CV espacial ====
+####
 
-library(glmnet)
 
-library(dplyr)
-library(glmnet)
 
 # 1) Dataset con outcome, UPZ y las variables seleccionadas
 df_enet <- train_final %>%
@@ -287,15 +370,12 @@ nrow(test_final)
 
 ### 4. Ajustar glmnet con best_alpha y best_lambda -----------------
 
-# Se asume que ya tienes:
-# best_alpha
-# best_lambda
+
 
 enet_final <- glmnet(
   x      = X_train,
   y      = y_train,
-  alpha  = best_alpha,
-  lambda = best_lambda,
+  alpha  = 0.5,
   family = "gaussian"
 )
 
@@ -308,7 +388,19 @@ pred_test <- as.vector(
 length(pred_test)
 nrow(test_final)  # deben ser iguales
 
-### 6. Exportar submission -----------------------------------------
+### 6. MAE in-sample (train) ---------------------------------------
+
+# Predicciones sobre el conjunto de entrenamiento
+pred_train <- as.vector(
+  predict(enet_final, newx = X_train, s = best_lambda)
+)
+
+# Calcular MAE in-sample
+mae_in_sample <- mean(abs(y_train - pred_train))
+cat("MAE in-sample (glmnet):", mae_in_sample, "\n")
+
+
+### 7. Exportar submission -----------------------------------------
 
 submission <- data.frame(
   property_id = test_final$property_id,
@@ -321,21 +413,13 @@ write.csv(
   row.names = FALSE
 )
 
-#Modelo NNN:
 
-library(nnet)
-library(dplyr)
+####
+# 8. NN V01 ======
+####
 
-### 1. Variables para la red 
 
-library(dplyr)
-library(neuralnet)
-# NN V01 =========================================================
-### 1. VARIABLES ---------------------------------------------
-library(keras)
-library(dplyr)
-
-## 1. Variables para la NN ----------------------------------
+## 1. Variables para la NN basadas en selection ----------------------
 
 train_final <- train_final %>%
   mutate(
@@ -401,7 +485,7 @@ X_test  <- X_all[(n_train + 1):nrow(X_all), , drop = FALSE]
 
 y_train <- as.numeric(train_nn$price)
 
-## 2. Validación espacial por UPZ ----------------------------
+## 2. Validación espacial por lOCALIDAD ----------------------------
 
 
 
@@ -517,11 +601,9 @@ write.csv(
 )
 
 
-# CART ======================
-library(rpart)
-library(dplyr)
-
-## 0. Variables que vamos a usar en los árboles -----------------
+####
+# 9. CART + selección cp & validación espacial ======
+####
 
 vars_cart <- c(
   "price",
@@ -583,9 +665,9 @@ df_val <- df_cart[idx_val, , drop = FALSE]
 
 mae_fun <- function(y, yhat) mean(abs(y - yhat))
 
-###############################################################
+
 ## 3. CART 1: árbol moderado (maxdepth = 7) + tuning de cp  ###
-###############################################################
+
 
 # Ajustamos un árbol base "grueso" en el fold de entrenamiento
 set.seed(123)
@@ -641,9 +723,9 @@ pred_train_cart1 <- predict(cart1_final, newdata = df_cart)
 mae_train_cart1  <- mae_fun(df_cart$price, pred_train_cart1)
 cat("CART1 - MAE in-sample:", mae_train_cart1, "\n")
 
-###############################################################
-## 4. CART 2: árbol grande (maxdepth = 12) + tuning de cp   ###
-###############################################################
+##
+## CART 2: árbol grande (maxdepth = 12) + tuning de cp   ###
+###
 
 set.seed(123)
 cart2_base <- rpart(
@@ -730,13 +812,14 @@ write.csv(
   row.names = FALSE
 )
 
-# NN v02 =========================================================
-library(keras)
-library(dplyr)
+####
+# 10.NN V02 (layers unidades y early stopping) ======
+####
+
 
 set.seed(123)
 
-# 1. VARIABLES FOR THE NN -----------------------------------------
+# 1. VARIABLES ---
 
 nn_vars <- c(
   "ESTRATO",
@@ -760,7 +843,7 @@ nn_vars <- nn_vars[nn_vars %in% names(train_final)]
 train_nn <- train_final
 test_nn  <- test_final
 
-# 1.1 Simple NA handling: NA -> 0 for these X ---------------------
+# 1 Manejo de Missings  ---
 
 for (v in nn_vars) {
   train_nn[[v]][is.na(train_nn[[v]])] <- 0
@@ -788,7 +871,7 @@ X_test  <- X_all[(n_train + 1):nrow(X_all), , drop = FALSE]
 
 y_train <- as.numeric(train_nn$price)
 
-# 2. SPATIAL VALIDATION BY LocCodigo -------------------------------
+# 2. Validación por LocCodigo ---
 
 LocCodigo_cv <- as.character(train_final$LocCodigo)
 LocCodigo_cv[is.na(LocCodigo_cv)] <- "0"
@@ -806,7 +889,7 @@ y_tr  <- y_train[idx_tr]
 X_val <- X_train[idx_val, , drop = FALSE]
 y_val <- y_train[idx_val]
 
-# 3. SCALING ------------------------------------------------------
+# 3. Escalamiento ---
 
 mu <- colMeans(X_tr)
 sd <- apply(X_tr, 2, sd)
@@ -821,7 +904,7 @@ X_val_sc    <- scale_fn(X_val,    mu, sd)
 X_train_sc  <- scale_fn(X_train,  mu, sd)
 X_test_sc   <- scale_fn(X_test,   mu, sd)
 
-# 4. MODEL BUILDER (layers x units) -------------------------------
+# 4. Construidor de modelos (layers x units) ---
 
 build_model <- function(n_layers, n_units, input_dim) {
   model <- keras_model_sequential()
@@ -851,7 +934,7 @@ build_model <- function(n_layers, n_units, input_dim) {
   model
 }
 
-# 5. GRID SEARCH: LAYERS x UNITS WITH EARLY STOPPING --------------
+# 5. GRID SEARCH: LAYERS x UNITS WITH EARLY STOPPING ---
 
 layers_grid <- c(2, 3, 5, 8)
 units_grid  <- c(4, 8, 12, 15, 18,21)
@@ -901,7 +984,7 @@ best_units  <- best_row$units
 
 cat("Best architecture:", best_layers, "layers x", best_units, "units\n")
 
-# 6. FINAL MODEL ON FULL TRAIN (WITH EARLY STOPPING) ---------------
+# 6. Modelo final ---
 
 model_final <- build_model(best_layers, best_units, ncol(X_train_sc))
 
@@ -951,7 +1034,9 @@ library(ranger)
 library(dplyr)
 
 
-### RANDONM FOREST V2 
+############################################################
+# 11. CART + selección cp & validación espacial
+############################################################
 
 ## 1. Variables del modelo (las del CART) ----------------------------
 
@@ -1125,6 +1210,8 @@ write.csv(
 
 library(data.table)
 library(sl3)
+library(future)
+
 
 set.seed(2025)
 
@@ -1142,18 +1229,16 @@ prop_var <- if ("property_type" %in% names(train_final)) {
 
 sl_covars <- c(
   "ESTRATO",
-  "surface_covered",
+  "surface_covered_final",
   "n_palabras_title",
   "n_lamparas_200m",
   "distancia_bus",
   "n_cafes_500m",
-  "EPE__m2_ha",
+  prop_var,
   "is_residential",
-  "cocina_integral",
-  prop_var,                 # puede ser NULL; lo filtramos abajo
+  "cocina_integral",                # puede ser NULL; lo filtramos abajo
   "bedrooms_final_set2",
   "bathrooms_final_set2",
-  "remodelada_text",
   "tiene_vigilancia_text",
   "menciona_cercania_txt",
   "menciona_cuadras_txt",
@@ -1275,7 +1360,8 @@ sl <- Lrnr_sl$new(
 )
 
 ## 6. Estimar Super Learner (con CV interna + id -> CV espacial) ----
-
+plan(multisession, workers = 4)
+options(future.globals.maxSize = +Inf)
 set.seed(2025)
 sl_fit <- sl$train(task = task)
 
