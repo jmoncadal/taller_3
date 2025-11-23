@@ -1,5 +1,5 @@
 ####
-# Proyecto : Taller 3 - Modelos de precio de vivienda (Chapinero)
+# Proyecto : Taller 3 - Modelos de precio de vivienda
 # Archivo  : 01_modelos_price.R
 # Autores  : Equipo X
 # Fecha    : 2025-11-23
