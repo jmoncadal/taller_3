@@ -28,7 +28,7 @@ Para enriquecer la información del entorno, usamos el paquete **`osmdata`** en 
 
 - Distancias a cafés, estaciones de bus y otros puntos de interés.
 - Conteos de amenidades en buffers alrededor de cada propiedad.
-- Variables de cercanía a centros comerciales y características del barrio.
+- Variables de cercanía a centros comerciales, características del barrio, restaurantes, discotecas, entre otros.
 
 Estas variables se calculan en los scripts y se almacenan en la carpeta `stores/` (ver sección de estructura).
 
@@ -71,8 +71,6 @@ Carpeta destinada a las bases de datos:
 
 - **Raw data**: archivos originales (por ejemplo, training y test de Properati).
 - **Datos procesados**: datasets resultantes del preprocesamiento, unión con variables espaciales, variables textuales, etc.
-
-> Nota: por temas de tamaño o confidencialidad, algunos archivos raw pueden no estar incluidos en el repositorio público. En ese caso, deben ubicarse aquí siguiendo los nombres esperados por los scripts.
 
 ### 3.3. `views/`
 
@@ -132,35 +130,9 @@ Se recomienda trabajar con **RStudio** para facilitar la ejecución de los scrip
 
 ### 5.2. Paquetes de R
 
-Los scripts usan `pacman` para cargar/instalar automáticamente las librerías necesarias. Fragmento relevante:
+Los scripts usan `pacman` para cargar/instalar automáticamente las librerías necesarias.
 
-```r
-rm(list = ls())
-
-# Importing libraries -----------------------------------------------------
-
-library(pacman)
-p_load(
-  rio, writexl, readxl, tidyverse, caret, keras,
-  reticulate, tidymodels, sf, gt, gtsummary, osmdata,
-  gridExtra, plotly, skimr, leaflet, lwgeom
-)
-p_load("spatialsample")
-
-p_load("caret")
-p_load("xgboost")
-p_load(leaps)
-p_load(xgboost, nnls)
-
-# Instalamos la versión más reciente de sl3 de GitHub. 
-if (!require(sl3)) {
-  remotes::install_github("tlverse/sl3")
-  library(sl3)
-  library(origami) # Validación cruzada diseñada para sl3.
-}
-```
-
-En resumen, se requiere (lista no exhaustiva):
+En resumen, se requiere:
 
 - **Infraestructura general**: `pacman`, `rio`, `readxl`, `writexl`, `tidyverse`, `caret`, `tidymodels`, `skimr`
 - **Modelos ML**: `xgboost`, `nnls`, `leaps`, `sl3`, `origami`, `keras`
