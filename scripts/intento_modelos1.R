@@ -946,3 +946,368 @@ write.csv(
   "submission_keras_NN_v02_layers_units_spatialCV.csv",
   row.names = FALSE
 )
+
+library(ranger)
+library(dplyr)
+
+
+### RANDONM FOREST V2 
+
+## 1. Variables del modelo (las del CART) ----------------------------
+
+vars_cart <- c(
+  "price",
+  "ESTRATO",
+  "surface_total", "surface_covered",
+  "n_palabras_title", "n_palabras_desc", "n_palabras_title_nocod",
+  "n_cafes_500m", "n_lamparas_200m",
+  "distancia_cafe", "distancia_bus",
+  "EPE__m2_ha", "EPCC", "EPT",
+  "SHAPE_AREA", "SHAPE_Area", "SHAPE_Area_1", "SHAPE_Area_12",
+  "CODIGO_UPZ", "CODIGO_ZON", "LocCodigo",
+  "tipo_inmueble_text_std", "property_type_final",
+  "tiene_sala", "tiene_comedor", "sala_comedor_conjunto",
+  "tiene_garaje_text", "garaje_cubierto_text", "garaje_indep_text",
+  "tiene_cocina", "cocina_integral", "cocina_abierta",
+  "tiene_patio_ropas", "tiene_vigilancia_text",
+  "menciona_cercania_txt", "menciona_cuadras_txt",
+  "is_residential", "remodelada_text",
+  "rooms.y", "bedrooms_final_set2", "bathrooms_final_set2",
+  "ESTRATO_was_na", "rooms.y_was_na",
+  "bedrooms_final_set2_was_na", "bathrooms_final_set2_was_na"
+)
+
+vars_cart <- intersect(vars_cart, names(train_final))
+
+df_cart <- train_final[, vars_cart, drop = FALSE]
+
+## 2. Tratamiento de NA  -------------------
+
+for (v in setdiff(names(df_cart), "price")) {
+  if (is.numeric(df_cart[[v]])) {
+    df_cart[[v]][is.na(df_cart[[v]])] <- 0
+  } else {
+    df_cart[[v]] <- as.character(df_cart[[v]])
+    df_cart[[v]][is.na(df_cart[[v]])] <- "missing"
+    df_cart[[v]] <- factor(df_cart[[v]])
+  }
+}
+
+## 3. Split espacial por LocCodigo ----------------------------------
+
+LocCodigo_cv <- as.character(train_final$LocCodigo)
+LocCodigo_cv[is.na(LocCodigo_cv)] <- "0"
+
+set.seed(123)
+loc_nonzero <- sort(unique(LocCodigo_cv[LocCodigo_cv != "0"]))
+n_val_loc   <- max(1, round(0.2 * length(loc_nonzero)))
+val_loc     <- sample(loc_nonzero, n_val_loc)
+
+idx_val <- which(LocCodigo_cv %in% val_loc)
+idx_tr  <- setdiff(seq_len(nrow(df_cart)), idx_val)
+
+df_tr  <- df_cart[idx_tr, , drop = FALSE]
+df_val <- df_cart[idx_val, , drop = FALSE]
+
+mae_fun <- function(y, yhat) mean(abs(y - yhat))
+
+## 4. Grilla de hiperparámetros -------------------------------------
+
+p <- ncol(df_cart) - 1  # sin contar price
+
+mtry_grid       <- unique(c(floor(sqrt(p)), floor(p/3), floor(p/2)))
+min_node_grid   <- c(10, 20, 40)
+
+grid <- expand.grid(
+  mtry          = mtry_grid,
+  min.node.size = min_node_grid
+)
+
+results_grid <- grid
+results_grid$MAE_val <- NA_real_
+
+## 5. Búsqueda en grilla con MAE en validación espacial -------------
+
+for (i in seq_len(nrow(grid))) {
+  mtry_i        <- grid$mtry[i]
+  min_node_i    <- grid$min.node.size[i]
+  
+  cat("RF grid search - mtry =", mtry_i,
+      "min.node.size =", min_node_i, "...\n")
+  
+  rf_i <- ranger(
+    formula              = price ~ .,
+    data                 = df_tr,
+    num.trees            = 800,       # fuerte pero razonable
+    mtry                 = mtry_i,
+    min.node.size        = min_node_i,
+    max.depth            = 12,        # fijo como pediste
+    sample.fraction      = 0.8,
+    respect.unordered.factors = "order",
+    seed                 = 123,
+    importance           = "impurity",
+    write.forest         = TRUE
+  )
+  
+  pred_val_i <- predict(rf_i, data = df_val)$predictions
+  mae_val_i  <- mae_fun(df_val$price, pred_val_i)
+  
+  results_grid$MAE_val[i] <- mae_val_i
+}
+
+print(results_grid)
+
+best_row_idx <- which.min(results_grid$MAE_val)
+best_mtry    <- results_grid$mtry[best_row_idx]
+best_min_node <- results_grid$min.node.size[best_row_idx]
+
+cat("Mejores hiperparámetros RF:",
+    "mtry =", best_mtry,
+    ", min.node.size =", best_min_node, "\n")
+
+## 6. Entrenar RF final en TODO el train ----------------------------
+
+set.seed(123)
+rf_final <- ranger(
+  formula              = price ~ .,
+  data                 = df_cart,
+  num.trees            = 1000,
+  mtry                 = best_mtry,
+  min.node.size        = best_min_node,
+  max.depth            = 12,
+  sample.fraction      = 0.8,
+  respect.unordered.factors = "order",
+  seed                 = 123,
+  importance           = "impurity",
+  write.forest         = TRUE
+)
+
+# MAE in-sample
+pred_train_rf <- predict(rf_final, data = df_cart)$predictions
+mae_train_rf  <- mae_fun(df_cart$price, pred_train_rf)
+cat("RF fuerte - MAE in-sample:", mae_train_rf, "\n")
+
+## 7. Predicción en test y exportación ------------------------------
+
+# Preparar df_test_cart con mismo tratamiento
+vars_cart_test <- setdiff(vars_cart, "price")  # en test no hay price
+vars_cart_test <- intersect(vars_cart_test, names(test_final))
+
+df_test_cart <- test_final[, vars_cart_test, drop = FALSE]
+
+for (v in names(df_test_cart)) {
+  if (is.numeric(df_test_cart[[v]])) {
+    df_test_cart[[v]][is.na(df_test_cart[[v]])] <- 0
+  } else {
+    df_test_cart[[v]] <- as.character(df_test_cart[[v]])
+    df_test_cart[[v]][is.na(df_test_cart[[v]])] <- "missing"
+    df_test_cart[[v]] <- factor(df_test_cart[[v]])
+  }
+}
+
+pred_test_rf <- predict(rf_final, data = df_test_cart)$predictions
+
+submission_rf <- data.frame(
+  property_id = test_final$property_id,
+  price       = pred_test_rf
+)
+
+write.csv(
+  submission_rf,
+  "submission_RF_fuerte_spatialCV_loc.csv",
+  row.names = FALSE
+)
+
+
+## ================================================================
+## SUPER LEARNER sl3 - PRICE (CONTINUOUS)
+## ================================================================
+
+library(data.table)
+library(sl3)
+
+set.seed(2025)
+
+## 0. Elegir covariables para el SL --------------------------------
+## (Basadas en las que has usado en glmnet / RF / NN)
+
+# Elegimos la variable de tipo propiedad según lo que exista
+prop_var <- if ("property_type" %in% names(train_final)) {
+  "property_type"
+} else if ("property_type_final" %in% names(train_final)) {
+  "property_type_final"
+} else {
+  NULL
+}
+
+sl_covars <- c(
+  "ESTRATO",
+  "surface_covered",
+  "n_palabras_title",
+  "n_lamparas_200m",
+  "distancia_bus",
+  "n_cafes_500m",
+  "EPE__m2_ha",
+  "is_residential",
+  "cocina_integral",
+  prop_var,                 # puede ser NULL; lo filtramos abajo
+  "bedrooms_final_set2",
+  "bathrooms_final_set2",
+  "remodelada_text",
+  "tiene_vigilancia_text",
+  "menciona_cercania_txt",
+  "menciona_cuadras_txt",
+  "tiene_cocina",
+  "cercania_cc",
+  "tiene_garaje_text"
+)
+
+# Quitamos NAs y nos quedamos solo con las que existen en train_final
+sl_covars <- sl_covars[!is.na(sl_covars)]
+sl_covars <- sl_covars[sl_covars %in% names(train_final)]
+
+## 1. Copias de trabajo + tratamiento de NAs -----------------------
+
+train_sl <- as.data.table(train_final)
+test_sl  <- as.data.table(test_final)
+
+# Aseguramos que LocCodigo exista
+if (!"LocCodigo" %in% names(train_sl)) stop("LocCodigo no está en train_final")
+if (!"LocCodigo" %in% names(test_sl))  stop("LocCodigo no está en test_final")
+
+# id espacial: sin NA y como character
+train_sl[is.na(LocCodigo), LocCodigo := "missing_loc"]
+test_sl[ is.na(LocCodigo), LocCodigo := "missing_loc"]
+
+train_sl[, LocCodigo := as.character(LocCodigo)]
+test_sl[ , LocCodigo := as.character(LocCodigo)]
+
+# Imputación simple para las X
+for (v in sl_covars) {
+  if (is.numeric(train_sl[[v]]) || is.integer(train_sl[[v]])) {
+    train_sl[is.na(get(v)), (v) := 0]
+    test_sl[ is.na(get(v)), (v) := 0]
+  } else {
+    train_sl[is.na(get(v)), (v) := "missing"]
+    test_sl[ is.na(get(v)), (v) := "missing"]
+    train_sl[, (v) := as.factor(get(v))]
+    test_sl[ , (v) := as.factor(get(v))]
+  }
+}
+
+# Aseguramos que price no tenga NA
+train_sl[is.na(price), price := 0]
+
+## 2. Definir Task con id = LocCodigo (CV clusterizada espacial) ----
+
+task <- sl3_Task$new(
+  data         = train_sl,
+  covariates   = sl_covars,
+  outcome      = "price",
+  outcome_type = "continuous",   # regresión
+  id           = "LocCodigo"     # <-- CV agrupada por localidad
+)
+
+## 3. Definir learners individuales --------------------------------
+
+# 3.0 Mean (PROMEDIO)
+lrn_mean <- Lrnr_mean$new()
+
+# 3.1 GLM (regresión lineal)
+lrn_glm <- Lrnr_glm$new()  # usa familia gaussiana por outcome continuo
+
+# 3.2 glmnet con alpha óptimo, dejando que el learner
+#     genere su propia secuencia de lambdas (lambda path)
+if (!exists("best_alpha")) {
+  best_alpha <- 0.5  # fallback, por si acaso
+}
+
+lrn_glmnet <- Lrnr_glmnet$new(
+  alpha   = best_alpha,
+  nlambda = 50,           # tamaño de la grilla interna de lambdas
+  family  = "gaussian"
+)
+
+# 3.3 CART sencillo (rpart)
+lrn_cart <- Lrnr_rpart$new(
+  cp       = 0.001,  # complejidad baja -> árbol algo detallado
+  minsplit = 20,
+  minbucket = 7,
+  maxdepth = 12
+)
+
+# 3.4 Random Forest (ranger)
+lrn_ranger <- Lrnr_ranger$new(
+  num.trees      = 500,
+  mtry           = min(5, length(sl_covars)),
+  min.node.size  = 20,
+  max.depth      = 12,
+  verbose        = FALSE
+)
+
+# 3.5 Neural Net sencilla (nnet)
+lrn_nnet <- Lrnr_nnet$new(
+  size   = 8,
+  linout = TRUE,
+  maxit  = 500,
+  trace  = FALSE
+)
+
+# Stack con TODOS los learners pedidos:
+learners <- Stack$new(
+  lrn_mean,    # promedio
+  lrn_glm,     # regresión lineal
+  lrn_glmnet,  # elastic net con alpha óptimo
+  lrn_cart,    # CART sencillo
+  lrn_ranger,  # RF fuerte
+  lrn_nnet     # NN simple
+)
+
+## 4. Metalearner: NNLS (combinación convexa) ----------------------
+
+metalearner <- Lrnr_nnls$new()
+
+## 5. Definir Super Learner ----------------------------------------
+
+sl <- Lrnr_sl$new(
+  learners    = learners,
+  metalearner = metalearner
+)
+
+## 6. Estimar Super Learner (con CV interna + id -> CV espacial) ----
+
+set.seed(2025)
+sl_fit <- sl$train(task = task)
+
+## 7. Riesgo CV de cada learner (MSE) -------------------------------
+
+cv_risk <- sl_fit$cv_risk(loss_squared_error)
+print(cv_risk)
+
+## 8. Predicciones in-sample + MAE ---------------------------------
+
+y_hat_train <- sl_fit$predict(task = task)
+mae_in_sample <- mean(abs(train_sl$price - y_hat_train))
+cat("MAE in-sample SuperLearner:", mae_in_sample, "\n")
+
+## 9. Predicción en test y export ----------------------------------
+
+prediction_task <- sl3_Task$new(
+  data       = test_sl,
+  covariates = sl_covars
+)
+
+y_hat_test <- sl_fit$predict(task = prediction_task)
+
+submission_sl <- data.frame(
+  property_id = test_final$property_id,
+  price       = as.vector(y_hat_test)
+)
+
+write.csv(
+  submission_sl,
+  "submission_sl3_locSpatial_mean_glm_glmnet_cart_ranger_nnet.csv",
+  row.names = FALSE
+)
+
+cat("Submission saved as: submission_sl3_locSpatial_mean_glm_glmnet_cart_ranger_nnet.csv\n")
