@@ -29,8 +29,8 @@
 # 7. glmnet con CV espacial por Localidad
 # 8. NN v01 (keras, grid tamaño)
 # 9. CART + selección de cp con validación espacial
-# 10. Random Forest sobre variables del CART
-# 11. NN v02 (layers x units + early stopping)
+# 10. NN v02 (layers x units + early stopping)
+# 11. Random Forest sobre variables del CART
 # 12. Super Learner (mean, glm, glmnet, CART, RF, NN)
 ####
 
@@ -91,43 +91,48 @@ wd_output <- "/views"
 # 4. Procesamientos ====
 ####
 
-train_final <- train_final %>% 
+# 2. Convertir a objetos sf con lon/lat ----------------------------
+train_final <- train_final %>%
   st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
 
-test_final <- test_final %>% 
+test_final <- test_final %>%
   st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
 
-localidades <- st_read(paste0(wd_main, wd_data, "/localidades.geojson"))
-localidades <- st_transform(localidades, 4326)
+# 3. Leer y transformar localidades -------------------------------
+wd_main  <- "C:/Users/Rodri/OneDrive/Rodri estudioso/GitHub/taller_3"
+wd_data  <- "/stores"
+
+localidades <- st_read(paste0(wd_main, wd_data, "/localidades.geojson")) %>%
+  st_transform(4326)
+
+# 4. Spatial join con columnas de interés ---
 train_sf <- st_join(
-  train_sf,
-  localidades %>% select(LocCodigo, LocNombre),
+  train_final,
+  localidades %>% dplyr::select(LocCodigo, LocNombre),
   left = TRUE
 )
 
 test_sf <- st_join(
-  test_sf,
-  localidades %>% select(LocCodigo, LocNombre),
+  test_final,
+  localidades %>% dplyr::select(LocCodigo, LocNombre),
   left = TRUE
 )
 
-# Volver a data.frame “normal” y sobrescribir los objetos finales
-train_final <- train_sf %>% st_drop_geometry()
-test_final  <- test_sf %>% st_drop_geometry()
+# 5. Volver a data.frame normal y quedarnos con columnas limpias --
+train_final <- train_sf %>%
+  st_drop_geometry() %>%
+  dplyr::mutate(
+    LocCodigo = LocCodigo,
+    LocNombre = LocNombre
+  )
 
-train_final <- train_final %>%
-  mutate(
-    LocCodigo = LocCodigo.y,
-    LocNombre = LocNombre.y
-  ) %>%
-  select(-LocCodigo.x, -LocNombre.x, -LocCodigo.y, -LocNombre.y)
+test_final <- test_sf %>%
+  st_drop_geometry() %>%
+  dplyr::mutate(
+    LocCodigo = LocCodigo,
+    LocNombre = LocNombre
+  )
 
-test_final <- test_final %>%
-  mutate(
-    LocCodigo = LocCodigo.y,
-    LocNombre = LocNombre.y
-  ) %>%
-  select(-LocCodigo.x, -LocNombre.x, -LocCodigo.y, -LocNombre.y)
 
 
 ####
@@ -1034,9 +1039,10 @@ library(ranger)
 library(dplyr)
 
 
-############################################################
-# 11. CART + selección cp & validación espacial
-############################################################
+####
+# 11.Randonm Forest ======
+####
+
 
 ## 1. Variables del modelo (las del CART) ----------------------------
 
@@ -1204,21 +1210,27 @@ write.csv(
 )
 
 
-## ================================================================
+####
+# 12.Super learner =====
+####
+
+
+## ===
 ## SUPER LEARNER sl3 - PRICE (CONTINUOUS)
-## ================================================================
+## CV ESPACIAL POR LOCALIDAD (LocCodigo)
+## Learners: mean, glm, glmnet, CART, ranger, nnet
+## Usando una sola matriz de diseño (train+test)-- si no no corre
+## ===
 
 library(data.table)
 library(sl3)
 library(future)
 
-
+## 0. Configurar ejecución (sin paralelo para evitar crashes) --
+plan(sequential)  # sin parallel; más estable
 set.seed(2025)
 
-## 0. Elegir covariables para el SL --------------------------------
-## (Basadas en las que has usado en glmnet / RF / NN)
-
-# Elegimos la variable de tipo propiedad según lo que exista
+## 1. Elegir covariables originales (antes de dummificar) ---
 prop_var <- if ("property_type" %in% names(train_final)) {
   "property_type"
 } else if ("property_type_final" %in% names(train_final)) {
@@ -1227,7 +1239,7 @@ prop_var <- if ("property_type" %in% names(train_final)) {
   NULL
 }
 
-sl_covars <- c(
+sl_covars_raw <- c(
   "ESTRATO",
   "surface_covered_final",
   "n_palabras_title",
@@ -1236,7 +1248,7 @@ sl_covars <- c(
   "n_cafes_500m",
   prop_var,
   "is_residential",
-  "cocina_integral",                # puede ser NULL; lo filtramos abajo
+  "cocina_integral",
   "bedrooms_final_set2",
   "bathrooms_final_set2",
   "tiene_vigilancia_text",
@@ -1247,81 +1259,111 @@ sl_covars <- c(
   "tiene_garaje_text"
 )
 
-# Quitamos NAs y nos quedamos solo con las que existen en train_final
-sl_covars <- sl_covars[!is.na(sl_covars)]
-sl_covars <- sl_covars[sl_covars %in% names(train_final)]
+sl_covars_raw <- sl_covars_raw[!is.na(sl_covars_raw)]
+sl_covars_raw <- sl_covars_raw[sl_covars_raw %in% names(train_final) &
+                                 sl_covars_raw %in% names(test_final)]
 
-## 1. Copias de trabajo + tratamiento de NAs -----------------------
+## 2. Preparar LocCodigo e Y ---
 
-train_sl <- as.data.table(train_final)
-test_sl  <- as.data.table(test_final)
+n_train <- nrow(train_final)
 
-# Aseguramos que LocCodigo exista
-if (!"LocCodigo" %in% names(train_sl)) stop("LocCodigo no está en train_final")
-if (!"LocCodigo" %in% names(test_sl))  stop("LocCodigo no está en test_final")
+loc_train <- train_final$LocCodigo
+loc_test  <- test_final$LocCodigo
 
-# id espacial: sin NA y como character
-train_sl[is.na(LocCodigo), LocCodigo := "missing_loc"]
-test_sl[ is.na(LocCodigo), LocCodigo := "missing_loc"]
+loc_train[is.na(loc_train)] <- "missing_loc"
+loc_test[is.na(loc_test)]   <- "missing_loc"
 
-train_sl[, LocCodigo := as.character(LocCodigo)]
-test_sl[ , LocCodigo := as.character(LocCodigo)]
+loc_train <- as.character(loc_train)
+loc_test  <- as.character(loc_test)
 
-# Imputación simple para las X
-for (v in sl_covars) {
-  if (is.numeric(train_sl[[v]]) || is.integer(train_sl[[v]])) {
-    train_sl[is.na(get(v)), (v) := 0]
-    test_sl[ is.na(get(v)), (v) := 0]
+y_train <- train_final$price
+
+## 3. Construir data.frame combinado de covariables ---
+
+df_train_cov <- as.data.frame(train_final[, sl_covars_raw, drop = FALSE])
+df_test_cov  <- as.data.frame(test_final[,  sl_covars_raw, drop = FALSE])
+
+# Imputación simple de NA antes de dummificar
+for (v in sl_covars_raw) {
+  if (is.numeric(df_train_cov[[v]]) || is.integer(df_train_cov[[v]])) {
+    df_train_cov[[v]][is.na(df_train_cov[[v]])] <- 0
+    df_test_cov[[v]][is.na(df_test_cov[[v]])]   <- 0
   } else {
-    train_sl[is.na(get(v)), (v) := "missing"]
-    test_sl[ is.na(get(v)), (v) := "missing"]
-    train_sl[, (v) := as.factor(get(v))]
-    test_sl[ , (v) := as.factor(get(v))]
+    df_train_cov[[v]][is.na(df_train_cov[[v]])] <- "missing"
+    df_test_cov[[v]][is.na(df_test_cov[[v]])]   <- "missing"
   }
 }
 
-# Aseguramos que price no tenga NA
-train_sl[is.na(price), price := 0]
+df_all <- rbind(df_train_cov, df_test_cov)
 
-## 2. Definir Task con id = LocCodigo (CV clusterizada espacial) ----
+# Forzamos categóricas a factor
+for (v in names(df_all)) {
+  if (is.character(df_all[[v]]) || is.factor(df_all[[v]])) {
+    df_all[[v]] <- factor(df_all[[v]])
+  }
+}
+
+## 4. Matriz de diseño común (dummies fijas para train y test) --
+
+MM_all <- model.matrix(~ . - 1, data = df_all)  # sin intercepto
+MM_all[is.na(MM_all)] <- 0                      # por si queda algo
+
+X_train <- MM_all[1:n_train, , drop = FALSE]
+X_test  <- MM_all[(n_train + 1):nrow(MM_all), , drop = FALSE]
+
+## 5. Data.table para sl3 (train y test) ---
+
+dt_train_sl <- as.data.table(X_train)
+dt_train_sl[, price := y_train]
+dt_train_sl[, LocCodigo := loc_train]
+
+# Reordenar: price, LocCodigo, luego Xs
+setcolorder(dt_train_sl, c("price", "LocCodigo",
+                           setdiff(names(dt_train_sl), c("price", "LocCodigo"))))
+
+dt_test_sl <- as.data.table(X_test)
+dt_test_sl[, LocCodigo := loc_test]
+
+sl_covars <- setdiff(names(dt_train_sl), c("price"))  # todas las X + LocCodigo, pero:
+# LocCodigo será id, no covariable
+sl_covars <- setdiff(sl_covars, "LocCodigo")
+
+## 6. Definir Task con id = LocCodigo ---
 
 task <- sl3_Task$new(
-  data         = train_sl,
+  data         = dt_train_sl,
   covariates   = sl_covars,
   outcome      = "price",
-  outcome_type = "continuous",   # regresión
-  id           = "LocCodigo"     # <-- CV agrupada por localidad
+  outcome_type = "continuous",
+  id           = "LocCodigo"
 )
 
-## 3. Definir learners individuales --------------------------------
+## 7. Definir learners individuales ---
 
-# 3.0 Mean (PROMEDIO)
+# 7.0 Promedio
 lrn_mean <- Lrnr_mean$new()
 
-# 3.1 GLM (regresión lineal)
-lrn_glm <- Lrnr_glm$new()  # usa familia gaussiana por outcome continuo
+# 7.1 GLM lineal
+lrn_glm <- Lrnr_glm$new()
 
-# 3.2 glmnet con alpha óptimo, dejando que el learner
-#     genere su propia secuencia de lambdas (lambda path)
-if (!exists("best_alpha")) {
-  best_alpha <- 0.5  # fallback, por si acaso
-}
+# 7.2 glmnet con alpha óptimo (dejamos lambda-path interna)
+if (!exists("best_alpha")) best_alpha <- 0.5
 
 lrn_glmnet <- Lrnr_glmnet$new(
   alpha   = best_alpha,
-  nlambda = 50,           # tamaño de la grilla interna de lambdas
+  nlambda = 50,
   family  = "gaussian"
 )
 
-# 3.3 CART sencillo (rpart)
+# 7.3 CART sencillo
 lrn_cart <- Lrnr_rpart$new(
-  cp       = 0.001,  # complejidad baja -> árbol algo detallado
-  minsplit = 20,
+  cp        = 0.001,
+  minsplit  = 20,
   minbucket = 7,
-  maxdepth = 12
+  maxdepth  = 12
 )
 
-# 3.4 Random Forest (ranger)
+# 7.4 Random Forest
 lrn_ranger <- Lrnr_ranger$new(
   num.trees      = 500,
   mtry           = min(5, length(sl_covars)),
@@ -1330,7 +1372,7 @@ lrn_ranger <- Lrnr_ranger$new(
   verbose        = FALSE
 )
 
-# 3.5 Neural Net sencilla (nnet)
+# 7.5 NNet sencilla
 lrn_nnet <- Lrnr_nnet$new(
   size   = 8,
   linout = TRUE,
@@ -1338,62 +1380,56 @@ lrn_nnet <- Lrnr_nnet$new(
   trace  = FALSE
 )
 
-# Stack con TODOS los learners pedidos:
 learners <- Stack$new(
-  lrn_mean,    # promedio
-  lrn_glm,     # regresión lineal
-  lrn_glmnet,  # elastic net con alpha óptimo
-  lrn_cart,    # CART sencillo
-  lrn_ranger,  # RF fuerte
-  lrn_nnet     # NN simple
+  lrn_mean,
+  lrn_glm,
+  lrn_glmnet,
+  lrn_cart,
+  lrn_ranger,
+  lrn_nnet
 )
 
-## 4. Metalearner: NNLS (combinación convexa) ----------------------
+## 8. Metalearner y SuperLearner --
 
 metalearner <- Lrnr_nnls$new()
-
-## 5. Definir Super Learner ----------------------------------------
 
 sl <- Lrnr_sl$new(
   learners    = learners,
   metalearner = metalearner
 )
 
-## 6. Estimar Super Learner (con CV interna + id -> CV espacial) ----
-plan(multisession, workers = 4)
-options(future.globals.maxSize = +Inf)
-set.seed(2025)
+## 9. Entrenar SuperLearner (CV espacial vía id) --
+
 sl_fit <- sl$train(task = task)
 
-## 7. Riesgo CV de cada learner (MSE) -------------------------------
+## 10. MAE in-sample ---
 
-cv_risk <- sl_fit$cv_risk(loss_squared_error)
-print(cv_risk)
-
-## 8. Predicciones in-sample + MAE ---------------------------------
-
-y_hat_train <- sl_fit$predict(task = task)
-mae_in_sample <- mean(abs(train_sl$price - y_hat_train))
+pred_train <- sl_fit$predict(task)
+mae_in_sample <- mean(abs(y_train - pred_train))
 cat("MAE in-sample SuperLearner:", mae_in_sample, "\n")
 
-## 9. Predicción en test y export ----------------------------------
+## 11. Predicción en test y export --
 
-prediction_task <- sl3_Task$new(
-  data       = test_sl,
-  covariates = sl_covars
+task_test <- sl3_Task$new(
+  data       = dt_test_sl,
+  covariates = sl_covars,
+  outcome    = NULL,
+  outcome_type = "continuous",
+  id         = "LocCodigo"
 )
 
-y_hat_test <- sl_fit$predict(task = prediction_task)
+pred_test <- sl_fit$predict(task_test)
 
 submission_sl <- data.frame(
   property_id = test_final$property_id,
-  price       = as.vector(y_hat_test)
+  price       = as.vector(pred_test)
 )
 
 write.csv(
   submission_sl,
-  "submission_sl3_locSpatial_mean_glm_glmnet_cart_ranger_nnet.csv",
+  "submission_sl3_locSpatial_MM_mean_glm_glmnet_cart_ranger_nnet.csv",
   row.names = FALSE
 )
 
-cat("Submission saved as: submission_sl3_locSpatial_mean_glm_glmnet_cart_ranger_nnet.csv\n")
+cat("Submission saved as: submission_sl3_locSpatial_MM_mean_glm_glmnet_cart_ranger_nnet.csv\n")
+
