@@ -1335,14 +1335,11 @@ RF_1000V2 <- train(
     cercania_cc +
     
     # NO LINEALIDADES (polinomios y logs)
-    I(EPE__m2_ha^2) +
-    I(bedrooms_final_set2^2) +
-    I(bathrooms_final_set2^2) +
-    I(log1p(distancia_cafe)) +
-    I(log1p(distancia_bus)) +
-    I(log1p(n_cafes_500m)) +
-    I(log1p(n_lamparas_200m)) +
-    I(precio_catastro_prom^2) +
+    poly(log1p(distancia_cafe)) +
+    poly(log1p(distancia_bus)) +
+    poly(log1p(n_cafes_500m)) +
+    poly(log1p(n_lamparas_200m)) +
+    poly(precio_catastro_prom,2,raw=TRUE) +
     
     # INTERACCIONES ESTRUCTURALES
     bedrooms_final_set2:bathrooms_final_set2 +         # tamaño “útil” del hogar
@@ -1369,10 +1366,388 @@ RF_1000V2 <- train(
   method = "ranger",  # Usamos el motor ranger para Random Forests
   trControl = fitControl,  # Especificamos los controles de validación cruzada definidos antes
   tuneGrid = expand.grid(   # Definimos la grilla de hiperparámetros a explorar
-    mtry = c(4,6,8),  # Número de predictores seleccionados al azar en cada división
+    mtry = c(8,10),  # Número de predictores seleccionados al azar en cada división
     splitrule = "variance",  # Regla de partición basada en la reducción de varianza (regresión)
-    min.node.size = c(30, 50, 70 )# Tamaño mínimo de nodos terminales
+    min.node.size = c(30)# Tamaño mínimo de nodos terminales
   ),
   metric = "MAE",
   num.trees = 1000
 )
+
+RF_1000V2
+
+
+predictSample_RF <- test_sf %>%
+  mutate(
+    pred_log_price  = predict(RF_1000V2, newdata = test_sf),   # predicción en log
+    price      = exp(pred_log_price)             # volver al nivel
+  ) %>%
+  select(property_id, price)
+
+predictSample_RF <- predictSample_RF %>% 
+  st_drop_geometry()
+
+# * Subido * 
+write.csv(predictSample_RF,paste0(wd_main, wd_output,"/estimacion_RF.csv"), row.names = FALSE)
+
+
+#SUPERLERNERS -----------------------------------------------------------
+p_load(xgboost,nnls)
+
+# Instalamos la versión más reciente de sl3 de GitHub. 
+if (!require(sl3)) {
+  remotes::install_github("tlverse/sl3")
+  library(sl3)
+  library(origami) # Validación cruzada diseñada para sl3.
+}
+#FOLDS
+num_obs <- nrow(train_sf)
+vec_obs <- 1:nrow(train_sf)
+fold_id <- data.frame(ID = integer(),
+                      num_fold = integer())
+
+for (k in 1:length(location_folds$splits)) {
+  temp_id <- setdiff(vec_obs, location_folds$splits[[k]][['in_id']])
+  temp_db <- data.frame(ID = temp_id,
+                        num_fold = k)
+  fold_id <- fold_id |> bind_rows(temp_db)
+}
+
+fold_id <- fold_id |> arrange(ID)
+fold_id <- fold_id$num_fold
+folds <- origami::make_folds(fold_id)
+# # Paso previo
+# 
+# vars_cart <- c(
+#   "price",
+#   "property_type",
+#     "ESTRATO",
+#     "EPE__m2_ha",
+#     "ESTRUCTURA",
+#     "n_palabras_title_nocod",
+#     "tiene_comedor",
+#     "sala_comedor_conjunto",
+#     "tiene_garaje_text",
+#     "tiene_deposito_bodega",
+#     "tiene_terraza",
+#     "tiene_patio_ropas",
+#     "remodelada_text",
+#     "tiene_vigilancia_text",
+#     "menciona_centro_comercial",
+#     "uso_comercial_text",
+#     "menciona_cercania_txt",
+#     "cercania_bus_text",
+#     "cercania_cafe_txt",
+#     "menciona_cuadras_txt",
+#     "bedrooms_final_set2",
+#     "bathrooms_final_set2",
+#     "ESTRATO_was_na",
+#     "rooms.y_was_na",
+#     "bathrooms_final_set2_was_n",
+#     "distancia_cafe",
+#     "n_cafes_500m",
+#     "distancia_bus",
+#     "n_lamparas_200m",
+#     "is_residential",
+#     "precio_catastro_prom",
+#     "precio_catastro_prom_was_n",
+#     "cercania_cc","property_id"
+# )
+# 
+# vars_cart <- intersect(vars_cart, names(train_sf))
+# 
+# df_cart <- train_sf[, vars_cart, drop = FALSE]
+# 
+# ## 2. Tratamiento de NA  -------------------
+# 
+# for (v in setdiff(names(df_cart), "price")) {
+#   if (is.numeric(df_cart[[v]])) {
+#     df_cart[[v]][is.na(df_cart[[v]])] <- 0
+#   } else {
+#     df_cart[[v]] <- as.character(df_cart[[v]])
+#     df_cart[[v]][is.na(df_cart[[v]])] <- "missing"
+#     df_cart[[v]] <- factor(df_cart[[v]])
+#   }
+# }
+# 
+# df_test <- test_sf[, vars_cart, drop = FALSE]
+# 
+# ## 2. Tratamiento de NA  -------------------
+# 
+# for (v in setdiff(names(df_test), "price")) {
+#   if (is.numeric(df_test[[v]])) {
+#     df_test[[v]][is.na(df_test[[v]])] <- 0
+#   } else {
+#     df_test[[v]] <- as.character(df_test[[v]])
+#     df_test[[v]][is.na(df_test[[v]])] <- "missing"
+#     df_test[[v]] <- factor(df_test[[v]])
+#   }
+# }
+# 
+# vars_cat <- c("EPE__m2_ha")
+# 
+# for (v in vars_cat) {
+#   niveles_df1 <- unique(df_cart[[v]])
+#   niveles_df2 <- unique(df_test[[v]])
+#   niveles_comunes <- intersect(niveles_df1, niveles_df2)
+#   
+#   df_cart[[v]] <- factor(df_cart[[v]], levels = niveles_comunes)
+#   df_test[[v]] <- factor(df_test[[v]], levels = niveles_comunes)
+#   
+#   df_cart[[v]] <- droplevels(df_cart[[v]])
+#   df_test[[v]] <- droplevels(df_test[[v]])
+# }
+
+library(dplyr)
+
+train_sf$bedrooms_final <- as.numeric(train_sf$bedrooms_final_set2)
+train_sf$bathrooms_final <- as.numeric(train_sf$bathrooms_final_set2)
+
+test_sf$bedrooms_final <- as.numeric(test_sf$bedrooms_final_set2)
+test_sf$bathrooms_final <- as.numeric(test_sf$bathrooms_final_set2)
+
+train_sf <- train_sf %>% 
+  mutate(
+    # Baños: 1,2,...,8, y "8+"
+    bathrooms_cat = factor(
+      if_else(
+        bathrooms_final_set2 > 4,      # condición
+        "4+",                          # si > 8
+        as.character(bathrooms_final_set2)  # si <= 8
+      ),
+      levels = c("0","1","2","3","4","4+")
+    ),
+    
+    # Habitaciones: 1,2,...,9, y "9+"
+    bedrooms_cat = factor(
+      if_else(
+        bedrooms_final_set2 > 6,       # condición
+        "6+",                          # si > 9
+        as.character(bedrooms_final_set2)   # si <= 9
+      ),
+      levels = c("0","1","2","3","4","5","6","6+")
+    )
+  )
+
+test_sf <- test_sf %>% 
+  mutate(
+    # Baños: 1,2,...,8, y "8+"
+    bathrooms_cat = factor(
+      if_else(
+        bathrooms_final_set2 > 4,      # condición
+        "4+",                          # si > 8
+        as.character(bathrooms_final_set2)  # si <= 8
+      ),
+      levels = c("0","1","2","3","4","4+")
+    ),
+    
+    # Habitaciones: 1,2,...,9, y "9+"
+    bedrooms_cat = factor(
+      if_else(
+        bedrooms_final_set2 > 6,       # condición
+        "6+",                          # si > 9
+        as.character(bedrooms_final_set2)   # si <= 9
+      ),
+      levels = c("0","1","2","3","4","5","6","6+")
+    )
+  )
+
+
+# Paso 1: Definir el problema de predicción.
+task <- sl3::sl3_Task$new(
+  data = train_sf,
+  covariates = c(
+    "property_type",
+        "ESTRATO",
+        # "EPE__m2_ha",
+        # "ESTRUCTURA",
+        "n_palabras_title_nocod",
+        "tiene_comedor",
+        "sala_comedor_conjunto",
+        "tiene_garaje_text",
+        "tiene_deposito_bodega",
+        "tiene_terraza",
+        "tiene_patio_ropas",
+        "remodelada_text",
+        "tiene_vigilancia_text",
+        "menciona_centro_comercial",
+        "uso_comercial_text",
+        "menciona_cercania_txt",
+        "cercania_bus_text",
+        "cercania_cafe_txt",
+        "menciona_cuadras_txt",
+        "bedrooms_final",
+        "bathrooms_final",
+        "ESTRATO_was_na",
+        "rooms.y_was_na",
+        "bathrooms_final_set2_was_na",
+        "distancia_cafe",
+        "n_cafes_500m",
+        "distancia_bus",
+        "n_lamparas_200m",
+        "is_residential",
+        "precio_catastro_prom",
+        "precio_catastro_prom_was_na",
+        "cercania_cc"
+  ), 
+  outcome = "price",
+  folds = folds
+)
+
+# Paso 2: Definir los learners individuales y agruparlos.
+learners <- Stack$new(
+  
+  # 1. Modelo de media
+  Lrnr_mean$new(),
+  
+  # 2. OLS (linear model)
+  Lrnr_glm$new(),
+  
+  # 3. glmnet con alpha = 0.9
+  Lrnr_glmnet$new(alpha = 0.9),
+  
+  # 3. glmnet con alpha = 0.5
+  Lrnr_glmnet$new(alpha = 0.5),
+  
+  # 4. glmnet con alpha = 0.1
+  Lrnr_glmnet$new(alpha = 0.1),
+  
+  # 5. Random Forest (Marcel)
+  Lrnr_ranger$new(num.trees = 1000, mtry = 10, min.node.size=30),   # puedes fijar hiperparámetros si te los pidieron
+  
+  # 6. Random Forest (Rodri)
+  Lrnr_ranger$new(num.trees = 1000, mtry = 6, min.node.size=10),   # puedes fijar hiperparámetros si te los pidieron
+  
+  # 7. CART
+  Lrnr_rpart$new(minbucket = 20,  minsplit  = 40, maxdepth = 12, cp=0.001538496),
+  
+  # 7. CART
+  Lrnr_rpart$new(minbucket = 20,  minsplit  = 40, maxdepth = 3, cp=0.001538496),
+  
+  # 8. XGBoost
+    Lrnr_xgboost$new(nrounds = 250, max_depth = 4, eta = 0.05, gamma = 0.5, colsample_bytree = 0.33, min_child_weight = 10, subsample = 0.4),
+  
+  # 9. NN.
+  Lrnr_nnet$new(size = 3, linout = TRUE, maxit = 500, trace = FALSE)
+  
+)
+
+# Paso 3: Definir el metalearner. En este caso, mínimos cuadrados no-negativos.
+metalearner <- Lrnr_nnls$new()
+
+# Paso 4: Definir el superlearner. Este involucra a los learners y al metalearner.
+sl <- Lrnr_sl$new(learners = learners,
+                  metalearner = metalearner)
+
+# Paso 5: Estimar el superlearner. Como algunos algoritmos pueden depender de
+# valores aleatorios, definimos una semilla antes del entrenamiento.
+set.seed(2025)
+sl_fit <- sl$train(task = task)
+
+loss_mae <- function(pred, observed) {
+  out <- abs(pred - observed)   # |y_hat - y|
+  attr(out, "name") <- "MAE"    # para que la columna se llame MAE
+  out
+}
+
+# 2. Pedir el riesgo CV usando MAE
+sl_fit$cv_risk(eval_fun = loss_mae)[, 1:3]
+# 
+
+prediction_task <- sl3::sl3_Task$new(data = test_sf,
+                                covariates = c( "property_type",
+                                                "ESTRATO",
+                                                # "EPE__m2_ha",
+                                                # "ESTRUCTURA",
+                                                "n_palabras_title_nocod",
+                                                "tiene_comedor",
+                                                "sala_comedor_conjunto",
+                                                "tiene_garaje_text",
+                                                "tiene_deposito_bodega",
+                                                "tiene_terraza",
+                                                "tiene_patio_ropas",
+                                                "remodelada_text",
+                                                "tiene_vigilancia_text",
+                                                "menciona_centro_comercial",
+                                                "uso_comercial_text",
+                                                "menciona_cercania_txt",
+                                                "cercania_bus_text",
+                                                "cercania_cafe_txt",
+                                                "menciona_cuadras_txt",
+                                                "bedrooms_final",
+                                                "bathrooms_final",
+                                                "ESTRATO_was_na",
+                                                "rooms.y_was_na",
+                                                "bathrooms_final_set2_was_na",
+                                                "distancia_cafe",
+                                                "n_cafes_500m",
+                                                "distancia_bus",
+                                                "n_lamparas_200m",
+                                                "is_residential",
+                                                "precio_catastro_prom",
+                                                "precio_catastro_prom_was_na",
+                                                "cercania_cc"))
+preds_sl <- sl_fit$predict(task = prediction_task)
+
+
+library(dplyr)
+
+test_pred <- test_sf %>% 
+  mutate(price = preds_sl) %>%  # pegamos las predicciones
+  select(property_id, price)    # deja solo estas dos columnas
+
+test_pred <- test_pred %>% 
+  st_drop_geometry()
+
+# * Subido * 
+write.csv(test_pred,paste0(wd_main, wd_output,"/estimacion_sl.csv"), row.names = FALSE)
+
+# XGBoost
+
+p_load('xgboost')
+
+grid_xbgoost <- expand.grid(nrounds = c(100,250),
+                            max_depth = c(2,4), 
+                            eta = c(0.01,0.05), 
+                            gamma = c(0,0.5), 
+                            min_child_weight = c(10, 25),
+                            colsample_bytree = c(0.33,0.66),
+                            subsample = c(0.4,0.8))
+
+Xgboost_tree <- train(
+  price ~ 
+    ESTRATO+
+    surface_total+surface_covered+
+    n_palabras_title+n_palabras_desc+n_palabras_title_nocod+
+    n_cafes_500m+n_lamparas_200m+
+    distancia_cafe+distancia_bus+
+    EPE__m2_ha+precio_catastro_prom+property_type_final+
+    tiene_sala+tiene_comedor+sala_comedor_conjunto+
+    tiene_garaje_text+garaje_cubierto_text+garaje_indep_text+
+    tiene_cocina+cocina_integral+cocina_abierta+
+    tiene_patio_ropas+tiene_vigilancia_text+
+    menciona_cercania_txt+menciona_cuadras_txt+
+    is_residential+remodelada_text+
+    rooms.y+bedrooms_final_set2+bathrooms_final_set2+
+    ESTRATO_was_na+rooms.y_was_na+
+    bedrooms_final_set2_was_na+bathrooms_final_set2_was_na
+  ,
+  data = train_sf,  # Dataset de entrenamiento
+  method = "xgbTree", 
+  trControl = fitControl,
+  tuneGrid=grid_xbgoost
+)
+
+Xgboost_tree
+
+predictxgboost <- test_sf %>%
+  mutate(
+    pred_log_price  = predict(Xgboost_tree, newdata = test_sf)
+  ) %>%
+  select(property_id, price)
+
+predictxgboost <- predictxgboost %>% 
+  st_drop_geometry()
+
+# * Subido * 
+write.csv(predictxgboost,paste0(wd_main, wd_output,"/estimacion_xgboost.csv"), row.names = FALSE)
