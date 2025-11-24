@@ -12,7 +12,7 @@ p_load(rio, writexl, readxl, tidyverse, caret, keras,
 
 # Establishing paths ------------------------------------------------------
 
-wd_main <- "C:/Users/Usuario/Documents/Andes/taller 3/taller_3"
+wd_main <- "C:/Users/Juan/OneDrive - Universidad de los andes/Escritorio/Universidad/Posgrado/1. Primer Semestre/Big Data y Machine Learning/Trabajos/taller_3"
 wd_data <- "/stores"
 wd_code <- "/scripts"
 wd_output <- "/views"
@@ -139,7 +139,7 @@ impute_categorical_by_cat <- function(data, cat_vars, group_vars) {
 correr <- 0
 
 # Importing data ----------------------------------------------------------
-if (correr == 1){
+
   test <- read.csv(paste0(wd_main, wd_data, "/test.csv"))
   train <- read.csv(paste0(wd_main, wd_data, "/train.csv"))
   
@@ -186,13 +186,9 @@ if (correr == 1){
   # Las casas tienden a tener precios más altos, pero hay muchos valores atípicos
   # para los apartamentos.
   
-  ggplot(train) +
-    geom_boxplot(aes(x = property_type, y = price, fill = property_type)) +
-    xlab("") +
-    ylab("Precio") +
-    theme_minimal() +
-    theme(legend.position = "none")
-  
+
+  # Box Plots precios
+
   # Spatial modeling --------------------------------------------------------
   
   train <- train %>% 
@@ -233,6 +229,22 @@ if (correr == 1){
            property_type = as.factor(property_type),
            CODIGO_UPZ = as.factor(CODIGO_UPZ),
            NOMBRE = as.factor(NOMBRE))
+
+  train <- train %>%
+    drop_na(price.x, surface_total.x, ESTRATO) %>% 
+    mutate(p_msq = price.x/surface_total.x) %>% 
+    filter(p_msq < 4e7) %>%
+    mutate(ESTRATO = as.factor(ESTRATO),
+           property_type = as.factor(property_type))
+  
+  boxplot_property <- ggplot(train) +
+    geom_boxplot(aes(x = property_type, y = p_msq, fill = ESTRATO)) +
+    xlab("") +
+    ylab("Precio") +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  ggsave(boxplot_property, file = paste0(wd_main, wd_output, "/boxplot_property.png"))
   
   # Room imputation
   
@@ -436,10 +448,10 @@ if (correr == 1){
   
   # Variable creation
   
-  #  train <- train %>%
-  #    drop_na(price, surface_total) %>% 
-  #    mutate(p_msq = price/surface_total)
-  
+    train <- train %>%
+      drop_na(price, surface_total) %>% 
+      mutate(p_msq = price/surface_total) %>% 
+      filter(property_type == "Casa" & p_msq < 4e7)
   
   # Creating map visualization
   
@@ -460,42 +472,42 @@ if (correr == 1){
   #              opacity = 1,
   #              radius = 1)
   
-  # Precio metro cuadrado apartamentos
+   #Precio metro cuadrado apartamentos
   
-  #  ggplot() +
-  #    geom_sf(data = upz, fill = "gray95", color = "black") +
-  #    geom_sf(data = train %>% 
-  #            dplyr::filter(property_type == "Apartamento"),
-  #            aes(color = p_msq),
-  #            shape = 16, size = 0.8, alpha = 0.7) +
-  #    scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
-  #    theme_minimal() +
-  #    theme(axis.text = element_blank(),
-  #          axis.title = element_blank(),
-  #          legend.position = "right") +
-  #  labs(title = "Precio por metro cuadrado — Apartamento")
+    p_msq_apto <- ggplot() +
+      geom_sf(data = upz, fill = "gray95", color = "black") +
+      geom_sf(data = train %>% 
+              dplyr::filter(property_type == "Apartamento"),
+              aes(color = p_msq),
+              shape = 16, size = 0.8, alpha = 0.7) +
+      scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
+      theme_minimal() +
+      theme(axis.text = element_blank(),
+            axis.title = element_blank(),
+            legend.position = "right") +
+    labs(title = "Precio por metro cuadrado — Apartamento")
+    
+    ggsave(p_msq_apto, filename = paste0(wd_main, wd_output, "/p_msq_apto.png"))
   
-  # Precio metro cuadrado casas
+   # Precio metro cuadrado casas
   
-  #  ggplot() +
-  #    geom_sf(data = upz, fill = "gray95", color = "black") +
-  #    geom_sf(data = train %>% 
-  #            dplyr::filter(property_type == "Casa"),
-  #            aes(color = p_msq),
-  #            shape = 16, size = 0.8, alpha = 0.7) +
-  #    scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
-  #    theme_minimal() +
-  #    theme(axis.text = element_blank(),
-  #          axis.title = element_blank(),
-  #          legend.position = "right") +
-  #    labs(title = "Precio por metro cuadrado — Casas")
-  
-  # Distribución viviendas por UPZ
-  
-  ggplot() +
-    geom_sf(data = upz, fill = "gray95", color = "black") +
-    geom_sf(data = train, aes(color = as.factor(CODIGO_UPZ)))
-  
+    p_msq_casas <- ggplot() +
+      geom_sf(data = upz, fill = "gray95", color = "black") +
+      geom_sf(data = train %>% 
+              dplyr::filter(property_type == "Casa"),
+              aes(color = p_msq),
+              shape = 16, size = 0.8, alpha = 0.7) +
+      scale_color_gradient(low = "#00008B", high = "#8B0000", name = "Precio por m²") +
+      theme_minimal() +
+      theme(axis.text = element_blank(),
+            axis.title = element_blank(),
+            legend.position = "right") +
+      labs(title = "Precio por metro cuadrado — Casas")
+    
+    ggsave(p_msq_casas, filename = paste0(wd_main, wd_output, "/p_msq_casas.png")) 
+ 
+
+
   # Spatial data ------------------------------------------------------------
   
   osmdata::available_features()
@@ -699,12 +711,12 @@ if (correr == 1){
   
   write_xlsx(train, paste0(wd_main, wd_data, "/train_final.xlsx"))
   write_xlsx(test, paste0(wd_main, wd_data, "/test_final.xlsx"))
-} else {
+
   # Models ------------------------------------------------------------------
   
   test <- read_xlsx(paste0(wd_main, wd_data, "/test_final.xlsx"))
   train <- read_xlsx(paste0(wd_main, wd_data, "/train_final.xlsx"))
-}
+
 
 # Cross validation folds ---------------------------------------------------
 
