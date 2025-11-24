@@ -168,16 +168,17 @@ Además, para algunos modelos y el notebook de texto puede ser necesario:
    - Colocar los archivos raw de Properati en la carpeta `stores/` (y subcarpetas si el script así lo requiere).
    - Verificar en `taller_3.R` los nombres exactos de los archivos esperados.
 
-4. **Generar bases procesadas y variables adicionales**  
+4.**Ejecutar el notebook de texto** (opcional pero recomendado si quieres reconstruir todo desde cero)  
+   - Abrir `scripts/text_analysis.ipynb` en Jupyter o VSCode.
+   - Ejecutar todas las celdas para generar las variables textuales y guardar el resultado en `stores/`.
+
+
+5. **Generar bases procesadas y variables adicionales**  
    - `taller_3.R`:
      - Lee los datos.
      - Limpia y transforma variables.
      - Calcula las variables espaciales usando `osmdata` y `sf`.
      - Integra variables textuales (provenientes del notebook o de archivos intermedios en `stores/`).
-
-5. **Ejecutar el notebook de texto** (opcional pero recomendado si quieres reconstruir todo desde cero)  
-   - Abrir `scripts/text_analysis.ipynb` en Jupyter o VSCode.
-   - Ejecutar todas las celdas para generar las variables textuales y guardar el resultado en `stores/`.
 
 6. **Explorar modelos adicionales**  
    - Correr `scripts/modelospt2.R` para:
